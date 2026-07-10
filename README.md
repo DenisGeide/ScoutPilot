@@ -71,6 +71,7 @@ scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 - [Архитектура](docs/architecture.md)
 - [Тестирование](docs/testing.md)
 - [Техническая защита проекта](docs/technical_defense.md)
+- [Release checklist](docs/release_checklist.md)
 - [Interview demo](docs/interview_demo.md)
 - [Ручной smoke-тест HH.ru](docs/hh_demo.md)
 - [Заметки для разработки](docs/development.md)
