@@ -74,8 +74,12 @@ def test_runtime_runs_mocked_end_to_end_to_completion():
         for event in events
         if event.name == "state_transition"
     )
+    assert any(event.name == "reflection_completed" for event in events)
     assert events[-1].status is RuntimeStatus.COMPLETED
-    assert any("Click the primary action" in item for item in memory.context_summaries(events[0].details["task_id"]))
+    memory_summaries = memory.context_summaries(events[0].details["task_id"])
+    assert any("Click the primary action" in item for item in memory_summaries)
+    assert any("evaluated as success" in item for item in memory_summaries)
+    assert "element_id" not in " ".join(memory_summaries)
 
 
 def test_runtime_retries_retryable_tool_failure_and_revises_plan():
@@ -146,8 +150,14 @@ def test_runtime_stops_at_max_iterations():
     assert events[-1].details["termination_reason"] == "max_iterations_exceeded"
 
 
-def test_runtime_surfaces_non_retryable_tool_failure():
-    provider = MockLlmProvider([_tool_call_result("test.click", {"target": "primary"})])
+def test_runtime_replans_when_semantic_element_disappears():
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("test.click", {"target": "primary"}),
+            _text_result("Recovered after replanning."),
+        ]
+    )
+    planner = FakePlanningEngine()
     tool_runtime = FakeToolRuntime(
         [
             _tool_result(
@@ -161,17 +171,25 @@ def test_runtime_surfaces_non_retryable_tool_failure():
             )
         ]
     )
-    runtime = _runtime(provider, FakePlanningEngine(), tool_runtime, HierarchicalMemory())
+    runtime = _runtime(
+        provider,
+        planner,
+        tool_runtime,
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=3, max_failures=2),
+    )
 
     events = asyncio.run(_collect(runtime.run(UserTask("Click missing element"))))
     tool_event = next(event for event in events if event.name == "tool_execution_finished")
+    reflection = next(event for event in events if event.name == "reflection_completed")
 
     assert runtime.last_result is not None
-    assert runtime.last_result.success is False
-    assert runtime.last_result.termination_reason is TaskTerminationReason.TOOL_FAILURE
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Recovered after replanning."
+    assert planner.revisions == 1
     assert tool_event.details["success"] is False
     assert tool_event.details["error_code"] == "semantic_element_not_found"
-    assert events[-1].status is RuntimeStatus.FAILED
+    assert reflection.details["recommended_action"] == "replan"
 
 
 def test_runtime_stops_when_retryable_failure_reaches_max_failures():
@@ -203,6 +221,33 @@ def test_runtime_stops_when_retryable_failure_reaches_max_failures():
     assert runtime.last_result.success is False
     assert runtime.last_result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED
     assert events[-1].details["termination_reason"] == "max_failures_exceeded"
+
+
+def test_runtime_observes_again_after_noop_without_consuming_failure_limit():
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("test.click", {"target": "primary"}),
+            _text_result("Done after no-op check."),
+        ]
+    )
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([_tool_result("test.click", success=True)]),
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=3, max_failures=1),
+        observation_engine=StaticObservationEngine(),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Click a no-op control"))))
+    reflection = next(event for event in events if event.name == "reflection_completed")
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Done after no-op check."
+    assert reflection.details["outcome"] == "uncertain"
+    assert reflection.details["recommended_action"] == "observe_again"
+    assert reflection.details["metrics"]["consecutive_no_progress_count"] == 1
 
 
 def test_runtime_waits_for_confirmation_when_reasoning_requests_it():
@@ -318,9 +363,10 @@ def _runtime(
     tool_runtime,
     memory,
     settings: RuntimeSettings | None = None,
+    observation_engine=None,
 ):
     return AutonomousAgentRuntime(
-        observation_engine=QueuedObservationEngine(),
+        observation_engine=observation_engine or QueuedObservationEngine(),
         reasoning_engine=ReasoningEngine(provider),
         planning_engine=planner,
         tool_runtime=tool_runtime,
@@ -400,6 +446,15 @@ class QueuedObservationEngine:
             url=f"https://example.test/page-{self.count}",
             title=f"Synthetic {self.count}",
             summary=f"Synthetic page {self.count}.",
+        )
+
+
+class StaticObservationEngine:
+    async def observe(self):
+        return PageObservation(
+            url="https://example.test/same",
+            title="Same",
+            summary="Same semantic state.",
         )
 
 

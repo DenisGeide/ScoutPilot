@@ -22,6 +22,9 @@
 - Любое завершение runtime должно иметь явный `AgentTaskResult` и понятный `termination_reason`.
 - State transitions должны иметь reason и внутренний structured log на английском.
 - Runtime tests должны использовать mocked providers, fake tools и synthetic observations, без live LLM и live сайтов.
+- Execution Intelligence должен оставаться deterministic и website-neutral: никаких CSS selectors, XPath, provider calls или прямого доступа к Playwright.
+- Reflection summaries должны быть короткими, безопасными для memory и не содержать raw HTML, cookies, tokens, field values или приватные файлы.
+- Replanning вызывается через Planning Engine; evaluator только рекомендует retry/replan/observe/confirm/stop и не исполняет tools.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.

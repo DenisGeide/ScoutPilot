@@ -13,7 +13,7 @@ Scout Pilot строится как набор независимых слоев
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет короткий provider-neutral план по user goal, semantic observation, memory summaries и available tool schemas, не исполняя tools. |
 | Hierarchical Memory | `scout_pilot.memory` | Хранит bounded working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует observe-think-plan-act-evaluate loop, state machine, memory, tool execution, progress, cancellation и explicit termination. |
-| Execution Intelligence | `scout_pilot.intelligence` | Оценивает прогресс, причины неудач и необходимость повторных попыток. |
+| Execution Intelligence | `scout_pilot.intelligence` | Оценивает tool outcomes, прогресс, no-op действия, повторные ошибки, валидность плана и необходимость retry/replan/confirmation/stop. |
 | Context Budgeting and Compression | `scout_pilot.context` | Контролирует размер контекста и сжимает наблюдения. |
 | Independent Security Policy Layer | `scout_pilot.security` | Классифицирует действия и требует подтверждение до внешних эффектов. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском. |
@@ -35,6 +35,8 @@ Scout Pilot строится как набор независимых слоев
 - Autonomous Agent Runtime не импортирует Playwright или provider SDKs; browser actions проходят только через Tool Runtime, reasoning — только через provider-neutral Reasoning Engine.
 - Runtime state transitions всегда имеют machine-readable reason и пишутся во внутренний structured log на английском.
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
+- Execution Intelligence получает только compact observations, provider-neutral tool results и plan state; он не обращается к Playwright, provider SDKs, raw HTML, cookies или browser profiles.
+- Reflection summaries сохраняются в memory как компактные episodic summaries, а не как raw traces.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
 
 ## Runtime lifecycle
@@ -46,8 +48,9 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 3. При первом проходе переходит в `planning` и строит execution plan.
 4. Переходит в `reasoning` и запрашивает provider-neutral решение у Reasoning Engine.
 5. Если выбран tool, переходит в `executing` и вызывает только Tool Runtime.
-6. После успешного tool execution переходит в `evaluating`; evaluator может запросить replanning.
-7. Завершает задачу только явным result: `completed`, `waiting_for_confirmation`, `cancelled` или `failed`.
+6. После каждого tool execution переходит в `evaluating`, получает post-action observation и вызывает Execution Intelligence.
+7. Reflection классифицирует outcome как `success`, `failure` или `uncertain` и рекомендует `continue`, `observe_again`, `retry`, `replan`, `request_confirmation` или `stop`.
+8. Завершает задачу только явным result: `completed`, `waiting_for_confirmation`, `cancelled` или `failed`.
 
 Защиты runtime:
 
@@ -55,9 +58,10 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 - `max_failures` ограничивает повторные ошибки provider/tool/recovery.
 - `cancel()` завершает задачу через `cancelled` без дополнительных browser actions.
 - Retryable tool failures переводят runtime в `retrying` и могут вызвать `PlanningEngine.revise_plan`.
+- Повторные no-op observations и повторяющиеся tool failures превращаются в reflection events и bounded memory summaries, чтобы runtime мог перестроить план без website-specific логики.
 
 ## Будущие этапы
 
-1. Context и Intelligence усилят сжатие, восстановление и оценку прогресса поверх bounded memory summaries.
+1. Context Budgeting усилит сжатие observation/memory перед Reasoning Engine.
 2. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
 3. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.

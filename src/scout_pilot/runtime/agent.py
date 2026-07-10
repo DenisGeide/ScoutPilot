@@ -8,7 +8,16 @@ from dataclasses import replace
 from typing import Protocol
 from uuid import uuid4
 
-from scout_pilot.intelligence.evaluator import ExecutionEvaluator
+from scout_pilot.intelligence.evaluator import (
+    DeterministicExecutionEvaluator,
+    ExecutionEvaluator,
+)
+from scout_pilot.intelligence.types import (
+    RecoveryAction,
+    StepEvaluation,
+    StepEvaluationContext,
+    StepOutcome,
+)
 from scout_pilot.llm.reasoning import ReasoningEngine
 from scout_pilot.llm.types import ReasoningContext, ReasoningStatus
 from scout_pilot.memory.store import MemoryStore
@@ -72,7 +81,7 @@ class AutonomousAgentRuntime:
         self._tool_runtime = tool_runtime
         self._memory = memory
         self._tool_schemas = tuple(tool_schemas)
-        self._evaluator = evaluator
+        self._evaluator = evaluator or DeterministicExecutionEvaluator()
         self._settings = settings or RuntimeSettings()
         self._security_constraints = tuple(security_constraints)
         self._confirmation_constraints = tuple(confirmation_constraints)
@@ -131,7 +140,12 @@ class AutonomousAgentRuntime:
                 )
                 yield transition
                 observation = await self._observation_engine.observe()
-                await self._remember_observation(task_id, iteration, observation)
+                await self._remember_observation(
+                    task_id,
+                    iteration,
+                    observation,
+                    phase="before_action",
+                )
                 yield self._event(
                     "observation_captured",
                     RuntimeStatus.RUNNING,
@@ -288,15 +302,15 @@ class AutonomousAgentRuntime:
                     failure_count += 1
                     continue
 
+                selected_tool = reasoning.selected_tool
                 yield self._transition(
                     AgentState.EXECUTING,
-                    f"Execute selected tool {reasoning.selected_tool.name}.",
+                    f"Execute selected tool {selected_tool.name}.",
                     task_id,
                     progress,
                 )
-                tool_result = await self._tool_runtime.execute(reasoning.selected_tool)
+                tool_result = await self._tool_runtime.execute(selected_tool)
                 await self._remember_tool_result(task_id, tool_result)
-                plan = _mark_plan_step(plan, reasoning.selected_tool, tool_result)
                 progress = _progress(iteration, self._settings, failure_count, plan)
                 yield self._event(
                     "tool_execution_finished",
@@ -314,13 +328,61 @@ class AutonomousAgentRuntime:
                     },
                 )
 
-                if tool_result.status is ToolExecutionStatus.PAUSED:
+                yield self._transition(
+                    AgentState.EVALUATING,
+                    "Evaluate progress after tool execution.",
+                    task_id,
+                    progress,
+                )
+                post_action_observation = await self._observation_engine.observe()
+                await self._remember_observation(
+                    task_id,
+                    iteration,
+                    post_action_observation,
+                    phase="after_action",
+                )
+                yield self._event(
+                    "post_action_observation_captured",
+                    RuntimeStatus.RUNNING,
+                    task_id=task_id,
+                    progress=progress,
+                    message_key="runtime.observation.after_action",
+                    details={
+                        "url": post_action_observation.url,
+                        "title": post_action_observation.title,
+                        "summary": post_action_observation.summary,
+                    },
+                )
+
+                evaluation = await self._evaluator.evaluate_step(
+                    StepEvaluationContext(
+                        plan=plan,
+                        tool_request=selected_tool,
+                        tool_result=tool_result,
+                        before_observation=observation,
+                        after_observation=post_action_observation,
+                        step=_find_plan_step(plan, selected_tool),
+                    )
+                )
+                await self._remember_reflection(task_id, iteration, evaluation)
+                plan = _mark_plan_step(plan, selected_tool, evaluation)
+                progress = _progress(iteration, self._settings, failure_count, plan)
+                yield self._event(
+                    "reflection_completed",
+                    RuntimeStatus.RUNNING,
+                    task_id=task_id,
+                    progress=progress,
+                    message_key="runtime.reflection.completed",
+                    details=_evaluation_details(evaluation),
+                )
+
+                if evaluation.recommended_action is RecoveryAction.REQUEST_CONFIRMATION:
                     result = await self._wait_for_confirmation(
                         task_id,
                         task,
                         progress,
                         plan,
-                        tool_result.message,
+                        evaluation.reflection_summary or tool_result.message,
                     )
                     self.last_result = result
                     yield self._event(
@@ -333,21 +395,45 @@ class AutonomousAgentRuntime:
                     )
                     return
 
-                if not tool_result.success:
+                if evaluation.outcome is StepOutcome.SUCCESS:
+                    failure_count = 0
+                elif evaluation.outcome is StepOutcome.FAILURE or evaluation.recommended_action in {
+                    RecoveryAction.RETRY,
+                    RecoveryAction.REPLAN,
+                    RecoveryAction.STOP,
+                }:
                     failure_count += 1
-                    if (
-                        not tool_result.retryable
-                        or failure_count >= self._settings.max_failures
-                    ):
+
+                if evaluation.recommended_action is RecoveryAction.STOP:
+                    result = await self._fail(
+                        task_id,
+                        task,
+                        _progress(iteration, self._settings, failure_count, plan),
+                        plan,
+                        TaskTerminationReason.TOOL_FAILURE,
+                        evaluation.reflection_summary,
+                        failure_count,
+                    )
+                    self.last_result = result
+                    yield self._event(
+                        "task_failed",
+                        RuntimeStatus.FAILED,
+                        task_id=task_id,
+                        progress=_progress(iteration, self._settings, failure_count, plan),
+                        message_key="runtime.task.failed",
+                        details=_result_details(result),
+                    )
+                    return
+
+                if evaluation.outcome is not StepOutcome.SUCCESS:
+                    if failure_count >= self._settings.max_failures:
                         result = await self._fail(
                             task_id,
                             task,
                             _progress(iteration, self._settings, failure_count, plan),
                             plan,
-                            TaskTerminationReason.TOOL_FAILURE
-                            if not tool_result.retryable
-                            else TaskTerminationReason.MAX_FAILURES_EXCEEDED,
-                            tool_result.message,
+                            TaskTerminationReason.MAX_FAILURES_EXCEEDED,
+                            evaluation.reflection_summary,
                             failure_count,
                         )
                         self.last_result = result
@@ -360,46 +446,35 @@ class AutonomousAgentRuntime:
                             details=_result_details(result),
                         )
                         return
+
+                if evaluation.recommended_action in {
+                    RecoveryAction.RETRY,
+                    RecoveryAction.REPLAN,
+                }:
                     plan, events = await self._handle_failure(
                         task=task,
                         task_id=task_id,
-                        observation=observation,
+                        observation=post_action_observation,
                         plan=plan,
                         failure_count=failure_count,
                         progress=_progress(iteration, self._settings, failure_count, plan),
-                        reason=tool_result.message,
+                        reason=evaluation.reflection_summary,
                     )
                     for event in events:
                         yield event
                     continue
 
-                failure_count = 0
-                yield self._transition(
-                    AgentState.EVALUATING,
-                    "Evaluate progress after successful tool execution.",
-                    task_id,
-                    progress,
+                yield self._event(
+                    "evaluation_completed",
+                    RuntimeStatus.RUNNING,
+                    task_id=task_id,
+                    progress=progress,
+                    message_key="runtime.evaluation.completed",
+                    details={
+                        "recommended_action": evaluation.recommended_action.value,
+                        "outcome": evaluation.outcome.value,
+                    },
                 )
-                if await self._needs_recovery(plan, observation):
-                    plan, events = await self._revise_plan(
-                        task=task,
-                        task_id=task_id,
-                        observation=observation,
-                        plan=plan,
-                        progress=progress,
-                        reason="Execution evaluator requested recovery.",
-                    )
-                    for event in events:
-                        yield event
-                else:
-                    yield self._event(
-                        "evaluation_completed",
-                        RuntimeStatus.RUNNING,
-                        task_id=task_id,
-                        progress=progress,
-                        message_key="runtime.evaluation.completed",
-                        details={"needs_recovery": False},
-                    )
 
                 if self._cancel_requested:
                     event, result = await self._cancel(task_id, task, progress, plan)
@@ -773,10 +848,12 @@ class AutonomousAgentRuntime:
         task_id: str,
         iteration: int,
         observation: PageObservation,
+        *,
+        phase: str,
     ) -> None:
         await self._memory.update(
             MemoryRecord(
-                key=f"observation_{iteration}",
+                key=f"observation_{iteration}_{phase}",
                 value={
                     "url": observation.url,
                     "title": observation.title,
@@ -787,6 +864,33 @@ class AutonomousAgentRuntime:
                 kind=MemoryRecordKind.OBSERVATION,
                 importance=20,
                 source="runtime",
+            )
+        )
+
+    async def _remember_reflection(
+        self,
+        task_id: str,
+        iteration: int,
+        evaluation: StepEvaluation,
+    ) -> None:
+        await self._memory.update(
+            MemoryRecord(
+                key=f"reflection_{iteration}",
+                value={
+                    "summary": evaluation.reflection_summary,
+                    "outcome": evaluation.outcome.value,
+                    "recommended_action": evaluation.recommended_action.value,
+                    "plan_validity": evaluation.plan_validity.value,
+                    "page_changed": evaluation.page_changed,
+                    "moved_forward": evaluation.moved_forward,
+                    "reasons": list(evaluation.reasons[:3]),
+                    "metrics": dict(evaluation.metrics.to_dict()),
+                },
+                scope=task_id,
+                layer=MemoryLayer.EPISODIC,
+                kind=MemoryRecordKind.SUMMARY,
+                importance=30,
+                source="execution_intelligence",
             )
         )
 
@@ -851,11 +955,11 @@ def _progress(
 def _mark_plan_step(
     plan: ExecutionPlan | None,
     request: ToolRequest,
-    result: ToolExecutionResult,
+    evaluation: StepEvaluation,
 ) -> ExecutionPlan | None:
     if plan is None:
         return None
-    status = PlanStepStatus.COMPLETED if result.success else PlanStepStatus.FAILED
+    status = _step_status_for_evaluation(evaluation)
     steps: list[PlanStep] = []
     updated = False
     for step in plan.steps:
@@ -879,6 +983,27 @@ def _mark_plan_step(
         is_fallback=plan.is_fallback,
         revision_reason=plan.revision_reason,
     )
+
+
+def _find_plan_step(plan: ExecutionPlan | None, request: ToolRequest) -> PlanStep | None:
+    if plan is None:
+        return None
+    return next(
+        (
+            step
+            for step in plan.steps
+            if step.status is PlanStepStatus.PENDING and _matches_step(step, request)
+        ),
+        None,
+    )
+
+
+def _step_status_for_evaluation(evaluation: StepEvaluation) -> PlanStepStatus:
+    if evaluation.outcome is StepOutcome.SUCCESS:
+        return PlanStepStatus.COMPLETED
+    if evaluation.outcome is StepOutcome.FAILURE:
+        return PlanStepStatus.FAILED
+    return PlanStepStatus.PENDING
 
 
 def _matches_step(step: PlanStep, request: ToolRequest) -> bool:
@@ -915,4 +1040,19 @@ def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
         "answer": result.answer,
         "iterations": result.iterations,
         "failures": result.failures,
+    }
+
+
+def _evaluation_details(evaluation: StepEvaluation) -> Mapping[str, object]:
+    return {
+        "outcome": evaluation.outcome.value,
+        "recommended_action": evaluation.recommended_action.value,
+        "plan_validity": evaluation.plan_validity.value,
+        "page_changed": evaluation.page_changed,
+        "moved_forward": evaluation.moved_forward,
+        "confirmation_required": evaluation.confirmation_required,
+        "reasons": list(evaluation.reasons),
+        "alternative_actions": list(evaluation.alternative_actions),
+        "metrics": dict(evaluation.metrics.to_dict()),
+        "reflection_summary": evaluation.reflection_summary,
     }
