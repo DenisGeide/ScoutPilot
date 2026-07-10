@@ -8,6 +8,7 @@ Scout Pilot строится как набор независимых слоев
 |---|---|---|
 | Browser Engine | `scout_pilot.browser` | Управляет видимым браузером, сессиями, навигацией и диагностическими скриншотами. Playwright изолирован здесь. |
 | Semantic Observation Engine | `scout_pilot.observation` | Преобразует контролируемый Browser Engine snapshot в компактное семантическое наблюдение без полного HTML и значений чувствительных полей. |
+| Universal Semantic Navigation | `scout_pilot.navigation` | Разрешает website-neutral navigation intents по semantic observation IDs, выбирает ссылки/кнопки/поля по roles, names и visible context, обнаруживает search fields, строит form-fill plan и помогает восстановиться после stale IDs. |
 | Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через provider-neutral схемы, ведет history и structured logs. |
 | LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом, содержит provider-specific tool schema adapters и Reasoning Engine. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет короткий provider-neutral план по user goal, semantic observation, memory summaries и available tool schemas, не исполняя tools. |
@@ -24,6 +25,8 @@ Scout Pilot строится как набор независимых слоев
 - Реализация Playwright не должна выходить за пределы Browser Engine.
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
 - Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
+- Universal Semantic Navigation работает только с `PageObservation` и provider-neutral tool contracts: он не знает Playwright, CSS selectors, XPath, DOM handles, hardcoded URLs или website-specific workflows.
+- Generic semantic tools (`browser.resolve_target`, `browser.click_by_intent`, `browser.fill_by_label`, `browser.plan_form_fill`) сначала разрешают намерение через observation IDs; неоднозначные цели возвращают structured failure вместо опасного угадывания.
 - Tool Runtime запускает deterministic Security Policy перед `tool.execute()` и не содержит provider-specific schema adapters.
 - LLM не может пометить действие как безопасное: `ToolRequest.risk` и аргументы модели не используются как источник доверия для security decision.
 - Sensitive, destructive и external-side-effect actions возвращают paused result с confirmation request; выполнение продолжается только после явного подтверждения exact request.
@@ -41,6 +44,7 @@ Scout Pilot строится как набор независимых слоев
 - Runtime state transitions всегда имеют machine-readable reason и пишутся во внутренний structured log на английском.
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
 - Runtime не продолжает автоматически после confirmation-required action: подтверждение только разрешает один следующий exact tool request.
+- Stale semantic IDs восстанавливаются через повторное observation и remap кандидата по тому же website-neutral intent; старые DOM handles не сохраняются.
 - Execution Intelligence получает только compact observations, provider-neutral tool results и plan state; он не обращается к Playwright, provider SDKs, raw HTML, cookies или browser profiles.
 - Reflection summaries сохраняются в memory как компактные episodic summaries, а не как raw traces.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.

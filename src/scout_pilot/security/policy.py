@@ -15,6 +15,7 @@ from scout_pilot.models import (
     PageObservation,
     ToolRequest,
 )
+from scout_pilot.navigation import SemanticNavigationResolver
 
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -33,6 +34,8 @@ _SAFE_BROWSER_TOOLS = {
     "browser.observe",
     "browser.wait",
     "browser.screenshot",
+    "browser.resolve_target",
+    "browser.plan_form_fill",
 }
 _SAFE_KEYS = {
     "escape",
@@ -328,7 +331,7 @@ class DeterministicSecurityPolicy:
                 expected_consequence="Действие только открывает, читает или диагностирует страницу.",
             )
 
-        if request.name == "browser.fill":
+        if request.name in {"browser.fill", "browser.fill_by_label"}:
             return ActionClassification(
                 risk=ActionRisk.SENSITIVE,
                 action="ввести данные в поле формы",
@@ -343,6 +346,9 @@ class DeterministicSecurityPolicy:
 
         if request.name == "browser.click":
             return _classify_click(request, context)
+
+        if request.name == "browser.click_by_intent":
+            return _classify_click_intent(request, context)
 
         text = _classification_text(request, context)
         matched = _matched_terms(text, _DESTRUCTIVE_TERMS)
@@ -498,6 +504,86 @@ def _classify_click(
     )
 
 
+def _classify_click_intent(
+    request: ToolRequest,
+    context: SecurityEvaluationContext,
+) -> ActionClassification:
+    target = str(request.arguments.get("target", "")).strip() or "элемент по семантическому намерению"
+    if context.observation is not None and target:
+        resolution = SemanticNavigationResolver().resolve_click(
+            context.observation,
+            target=target,
+            role=_optional_argument(request.arguments, "role"),
+            context=_optional_argument(request.arguments, "context"),
+        )
+        if resolution.is_resolved and resolution.selected is not None:
+            candidate = resolution.selected
+            return _classification_from_action_text(
+                _normalize(
+                    " ".join(
+                        str(value)
+                        for value in (
+                            candidate.role,
+                            candidate.name,
+                            candidate.visible_text,
+                            candidate.context,
+                            candidate.target_url,
+                            candidate.input_type,
+                        )
+                        if value
+                    )
+                ),
+                action=f"нажать «{candidate.name or target}»",
+            )
+        if resolution.status.value == "ambiguous":
+            return ActionClassification(
+                risk=ActionRisk.EXTERNAL_SIDE_EFFECT,
+                action=f"нажать «{target}»",
+                expected_consequence=(
+                    "Намерение совпало с несколькими элементами, поэтому нельзя надежно исключить внешний эффект."
+                ),
+                matched_terms=("ambiguous_semantic_target",),
+                uncertain=True,
+            )
+
+    text = _classification_text(request, context)
+    return _classification_from_action_text(text, action=f"нажать «{target}»")
+
+
+def _classification_from_action_text(text: str, *, action: str) -> ActionClassification:
+    normalized = _normalize(text)
+
+    matched = _matched_terms(normalized, _DESTRUCTIVE_TERMS)
+    if matched:
+        return ActionClassification(
+            risk=ActionRisk.DESTRUCTIVE,
+            action=action,
+            expected_consequence="Данные могут быть удалены, отменены или перемещены в корзину/спам.",
+            matched_terms=matched,
+        )
+    matched = _matched_terms(normalized, _EXTERNAL_SIDE_EFFECT_TERMS)
+    if matched:
+        return ActionClassification(
+            risk=ActionRisk.EXTERNAL_SIDE_EFFECT,
+            action=action,
+            expected_consequence="Действие может отправить данные, отклик, сообщение, заказ или публикацию.",
+            matched_terms=matched,
+        )
+    matched = _matched_terms(normalized, _SENSITIVE_TERMS)
+    if matched:
+        return ActionClassification(
+            risk=ActionRisk.SENSITIVE,
+            action=action,
+            expected_consequence="Действие может изменить настройки или затронуть личные данные.",
+            matched_terms=matched,
+        )
+    return ActionClassification(
+        risk=ActionRisk.SAFE,
+        action=action,
+        expected_consequence="Намерение не похоже на отправку, удаление, покупку, публикацию или изменение настроек.",
+    )
+
+
 def _is_blocked_navigation(request: ToolRequest) -> bool:
     if request.name != "browser.navigate":
         return False
@@ -551,6 +637,14 @@ def _classification_text(
         *(str(value) for value in request.arguments.values()),
     ]
     return _normalize(" ".join(parts))
+
+
+def _optional_argument(arguments: Mapping[str, object], name: str) -> str | None:
+    value = arguments.get(name)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _find_interactive_element(

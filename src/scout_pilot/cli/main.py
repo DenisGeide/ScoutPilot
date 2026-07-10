@@ -59,7 +59,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _print_status(config: AppConfig) -> None:
     print("Scout Pilot: фундамент проекта готов.")
-    print("Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting и Security Policy подключены.")
+    print("Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Security Policy и Universal Semantic Navigation подключены.")
     print("Live LLM-вызовы и полноценный автономный запуск из CLI пока не включены.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")

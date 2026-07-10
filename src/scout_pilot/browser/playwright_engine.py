@@ -36,7 +36,7 @@ SUPPORTED_URL_SCHEMES = {"http", "https", "file", "about"}
 SEMANTIC_INTERACTIVE_SELECTOR = (
     "a[href],button,input,textarea,select,summary,"
     "[role='button'],[role='link'],[role='checkbox'],[role='radio'],"
-    "[role='textbox'],[role='combobox'],[role='menuitem'],[role='tab'],"
+    "[role='textbox'],[role='searchbox'],[role='combobox'],[role='menuitem'],[role='tab'],"
     "[tabindex]:not([tabindex='-1']),[contenteditable='true']"
 )
 
@@ -321,7 +321,7 @@ class PlaywrightBrowserEngine:
                         message="Checkbox and radio fields require a boolean-like value.",
                         error_code="invalid_field_value",
                     )
-            elif input_type is None and role not in {"textbox", "combobox"}:
+            elif not _is_text_fillable(input_type, role):
                 return BrowserActionResult(
                     action="fill_by_semantic_id",
                     success=False,
@@ -520,6 +520,22 @@ def _is_supported_url(url: str) -> bool:
     if parsed.scheme in {"http", "https"} and not parsed.netloc:
         return False
     return True
+
+
+def _is_text_fillable(input_type: str | None, role: str | None) -> bool:
+    if role in {"textbox", "combobox", "searchbox"}:
+        return True
+    return input_type in {
+        "text",
+        "search",
+        "email",
+        "url",
+        "tel",
+        "password",
+        "number",
+        "textarea",
+        "contenteditable",
+    }
 
 
 def _snapshot_from_raw(raw: dict[str, Any]) -> BrowserPageSnapshot:
@@ -790,6 +806,7 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
   };
   const inputTypeOf = (element) => {
     const tag = element.tagName.toLowerCase();
+    if (tag === "button") return normalizeText(element.getAttribute("type")).toLowerCase() || (element.form ? "submit" : "button");
     if (tag === "input") return normalizeText(element.getAttribute("type")).toLowerCase() || "text";
     if (tag === "textarea") return "textarea";
     if (tag === "select") return element.multiple ? "select-multiple" : "select";
@@ -886,7 +903,7 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
     return role === "div" ? "section" : role;
   };
   const sectionSelector = "main,header,nav,footer,aside,article,section,form,[role='main'],[role='navigation'],[role='region'],[role='banner'],[role='contentinfo']";
-  const interactiveSelector = "a[href],button,input,textarea,select,summary,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='combobox'],[role='menuitem'],[role='tab'],[tabindex]:not([tabindex='-1']),[contenteditable='true']";
+  const interactiveSelector = "a[href],button,input,textarea,select,summary,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='searchbox'],[role='combobox'],[role='menuitem'],[role='tab'],[tabindex]:not([tabindex='-1']),[contenteditable='true']";
   const dialogSelector = "dialog[open],[role='dialog'],[role='alertdialog'],[aria-modal='true']";
 
   const sections = Array.from(doc.querySelectorAll(sectionSelector))
@@ -1020,6 +1037,7 @@ _SINGLE_ELEMENT_SEMANTIC_SCRIPT = """
   };
   const inputTypeOf = (candidate) => {
     const tag = candidate.tagName.toLowerCase();
+    if (tag === "button") return normalizeText(candidate.getAttribute("type")).toLowerCase() || (candidate.form ? "submit" : "button");
     if (tag === "input") return normalizeText(candidate.getAttribute("type")).toLowerCase() || "text";
     if (tag === "textarea") return "textarea";
     if (tag === "select") return candidate.multiple ? "select-multiple" : "select";

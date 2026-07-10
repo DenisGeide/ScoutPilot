@@ -87,6 +87,38 @@ def test_policy_ignores_llm_supplied_safe_risk():
     assert decision.requires_confirmation is True
 
 
+def test_policy_resolves_click_intent_before_classification():
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.click_by_intent",
+            arguments={"target": "search", "role": "button"},
+        ),
+        SecurityEvaluationContext(
+            observation=PageObservation(
+                url="https://example.test",
+                title="Search",
+                summary="Search fixture.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id="el_search",
+                        role="button",
+                        accessible_name="Search",
+                        visible_text="Search",
+                        input_type="submit",
+                    )
+                ],
+            )
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk is ActionRisk.EXTERNAL_SIDE_EFFECT
+    assert decision.requires_confirmation is True
+    assert "submit" in decision.classification.matched_terms
+
+
 def test_confirmed_exact_request_is_allowed_once_by_policy_context():
     policy = DeterministicSecurityPolicy()
     request = ToolRequest(name="browser.click", arguments={"element_id": "el_submit"})

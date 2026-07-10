@@ -8,5 +8,5 @@ def test_status_command_prints_russian_placeholder(capsys):
 
     assert exit_code == 0
     assert "фундамент проекта готов" in captured.out
-    assert "Security Policy подключены" in captured.out
+    assert "Universal Semantic Navigation подключены" in captured.out
     assert "Semantic Observation Engine" in captured.out

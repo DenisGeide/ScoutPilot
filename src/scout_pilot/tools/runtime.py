@@ -251,7 +251,13 @@ class DefaultToolRuntime:
         )
 
     async def _security_observation(self, tool_name: str):
-        if tool_name not in {"browser.click", "browser.fill", "browser.press_key"}:
+        if tool_name not in {
+            "browser.click",
+            "browser.click_by_intent",
+            "browser.fill",
+            "browser.fill_by_label",
+            "browser.press_key",
+        }:
             return None
         if self._context.observation_engine is None:
             return None

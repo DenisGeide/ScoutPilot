@@ -13,6 +13,9 @@
 - Использовать mocked providers в автоматических тестах LLM layer.
 - Не вызывать реальные LLM API в детерминированных тестах.
 - Планировщик должен ссылаться на semantic tool capabilities, а не на CSS selectors, XPath, Playwright locators или hardcoded routes.
+- Для новых браузерных сценариев сначала использовать semantic observation IDs и `scout_pilot.navigation`: `browser.resolve_target`, `browser.click_by_intent`, `browser.fill_by_label` и `browser.plan_form_fill`. Не добавлять per-site selectors, XPath, internal route assumptions или adapters под конкретный сайт.
+- Если semantic target неоднозначен, tool должен вернуть structured failure и кандидатов, а не выбирать первый подходящий элемент.
+- Stale element recovery должен пере-наблюдать страницу и remap-ить кандидата по semantic intent; нельзя хранить или переиспользовать DOM handles вне Browser Engine.
 - Replanning обязан сохранять уже выполненные шаги плана.
 - Память делится на working, task и episodic layers; не добавлять один общий неструктурированный memory blob.
 - В memory можно хранить цель пользователя, ограничения, подтвержденные выборы, warnings и компактные event summaries.

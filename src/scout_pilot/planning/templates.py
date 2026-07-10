@@ -20,8 +20,9 @@ Playwright should do it.
 Rules:
 - Stay website-neutral.
 - Use semantic tool capabilities such as browser.observe, browser.navigate,
-  browser.click, browser.fill, browser.press_key, browser.wait and
-  browser.screenshot.
+  browser.resolve_target, browser.click_by_intent, browser.fill_by_label,
+  browser.plan_form_fill, browser.click, browser.fill, browser.press_key,
+  browser.wait and browser.screenshot.
 - Do not use CSS selectors, XPath, Playwright locators, DOM APIs, route paths
   or website-specific selectors.
 - Mark uncertain steps honestly.

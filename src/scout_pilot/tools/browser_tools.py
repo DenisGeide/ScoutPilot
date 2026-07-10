@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Mapping
 
 from scout_pilot.browser.types import BrowserActionResult, ScreenshotResult
+from scout_pilot.navigation import (
+    NavigationIntent,
+    NavigationIntentKind,
+    SemanticNavigationResolver,
+    SemanticResolution,
+    SemanticResolutionStatus,
+)
 from scout_pilot.tools.base import ToolContext
 from scout_pilot.tools.registry import ToolRegistry
 from scout_pilot.tools.types import (
@@ -31,6 +38,7 @@ RETRYABLE_BROWSER_CODES = {
     "fill_timeout",
     "wait_error",
     "press_key_error",
+    "semantic_target_not_found",
 }
 NON_RETRYABLE_BROWSER_CODES = {
     "invalid_url",
@@ -39,6 +47,8 @@ NON_RETRYABLE_BROWSER_CODES = {
     "invalid_wait_duration",
     "invalid_field_value",
     "element_not_fillable",
+    "semantic_target_ambiguous",
+    "semantic_resolution_invalid",
 }
 
 
@@ -144,6 +154,314 @@ class FillTool:
             str(arguments["value"]),
         )
         return _outcome_from_browser_action(result)
+
+
+@dataclass(frozen=True)
+class ResolveSemanticTargetTool:
+    name: str = "browser.resolve_target"
+    description: str = (
+        "Resolve a website-neutral semantic intent to visible observation IDs without clicking."
+    )
+    input_schema: ToolInputSchema = ToolInputSchema(
+        fields=(
+            ToolFieldSchema(
+                name="kind",
+                value_type=ToolValueType.STRING,
+                description="Intent kind to resolve.",
+                enum_values=("click", "field", "search_field"),
+            ),
+            ToolFieldSchema(
+                name="target",
+                value_type=ToolValueType.STRING,
+                description="Human-visible target text, label or accessible name.",
+                required=False,
+                max_length=240,
+            ),
+            ToolFieldSchema(
+                name="role",
+                value_type=ToolValueType.STRING,
+                description="Optional semantic role hint such as link, button or textbox.",
+                required=False,
+                max_length=64,
+            ),
+            ToolFieldSchema(
+                name="context",
+                value_type=ToolValueType.STRING,
+                description="Optional visible context to disambiguate similar targets.",
+                required=False,
+                max_length=240,
+            ),
+        )
+    )
+    output_schema: ToolOutputSchema = ToolOutputSchema(
+        fields=(
+            ToolFieldSchema(
+                "resolution",
+                ToolValueType.OBJECT,
+                "Semantic resolution result with visible candidate IDs.",
+            ),
+        )
+    )
+    timeout_seconds: float = 10.0
+
+    async def execute(
+        self,
+        arguments: dict[str, object],
+        context: ToolContext,
+    ) -> ToolExecutionOutcome:
+        observation_engine = _require_observation_engine(context)
+        observation = await observation_engine.observe()
+        intent = _intent_from_arguments(arguments)
+        resolution = SemanticNavigationResolver().resolve(observation, intent)
+        return ToolExecutionOutcome(
+            success=resolution.status is not SemanticResolutionStatus.INVALID,
+            message=resolution.message,
+            data={"resolution": resolution.to_dict()},
+            failure_kind=(
+                ToolFailureKind.VALIDATION
+                if resolution.status is SemanticResolutionStatus.INVALID
+                else None
+            ),
+            retryable=False,
+            error_code=(
+                "semantic_resolution_invalid"
+                if resolution.status is SemanticResolutionStatus.INVALID
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class ClickByIntentTool:
+    name: str = "browser.click_by_intent"
+    description: str = (
+        "Click a visible interactive element by semantic intent using role, name and context."
+    )
+    input_schema: ToolInputSchema = ToolInputSchema(
+        fields=(
+            ToolFieldSchema(
+                name="target",
+                value_type=ToolValueType.STRING,
+                description="Visible text, accessible name or intent phrase to click.",
+                min_length=1,
+                max_length=240,
+            ),
+            ToolFieldSchema(
+                name="role",
+                value_type=ToolValueType.STRING,
+                description="Optional role hint such as link, button, tab or menuitem.",
+                required=False,
+                max_length=64,
+            ),
+            ToolFieldSchema(
+                name="context",
+                value_type=ToolValueType.STRING,
+                description="Optional visible context for disambiguation.",
+                required=False,
+                max_length=240,
+            ),
+        )
+    )
+    output_schema: ToolOutputSchema = ToolOutputSchema(
+        fields=(
+            *_browser_action_output_schema().fields,
+            ToolFieldSchema(
+                "resolution",
+                ToolValueType.OBJECT,
+                "Semantic candidate selected for the click.",
+            ),
+            ToolFieldSchema(
+                "transition",
+                ToolValueType.OBJECT,
+                "Semantic page transition detected after the click.",
+            ),
+        )
+    )
+    timeout_seconds: float = 20.0
+
+    async def execute(
+        self,
+        arguments: dict[str, object],
+        context: ToolContext,
+    ) -> ToolExecutionOutcome:
+        browser = _require_browser(context)
+        observation_engine = _require_observation_engine(context)
+        resolver = SemanticNavigationResolver()
+        before = await observation_engine.observe()
+        resolution = resolver.resolve_click(
+            before,
+            target=str(arguments["target"]),
+            role=_optional_argument(arguments, "role"),
+            context=_optional_argument(arguments, "context"),
+        )
+        if not resolution.is_resolved:
+            return _resolution_failure(resolution)
+
+        result = await browser.click_by_semantic_id(resolution.selected.element_id)
+        recovered = False
+        if result.error_code == "semantic_element_not_found":
+            refreshed = await observation_engine.observe()
+            remapped = resolver.resolve_click(
+                refreshed,
+                target=str(arguments["target"]),
+                role=_optional_argument(arguments, "role"),
+                context=_optional_argument(arguments, "context"),
+            )
+            if remapped.is_resolved:
+                resolution = remapped
+                recovered = True
+                result = await browser.click_by_semantic_id(resolution.selected.element_id)
+
+        after = await observation_engine.observe()
+        return _outcome_from_semantic_action(
+            result,
+            resolution=resolution,
+            transition=resolver.detect_transition(before, after),
+            recovered_from_stale=recovered,
+        )
+
+
+@dataclass(frozen=True)
+class FillByLabelTool:
+    name: str = "browser.fill_by_label"
+    description: str = (
+        "Fill a visible form field by semantic label, accessible name or generic search-field intent."
+    )
+    input_schema: ToolInputSchema = ToolInputSchema(
+        fields=(
+            ToolFieldSchema(
+                name="label",
+                value_type=ToolValueType.STRING,
+                description="Field label, accessible name, placeholder or generic search intent.",
+                min_length=1,
+                max_length=240,
+            ),
+            ToolFieldSchema(
+                name="value",
+                value_type=ToolValueType.STRING,
+                description="Value to enter into the field.",
+                sensitive=True,
+                max_length=10000,
+            ),
+            ToolFieldSchema(
+                name="context",
+                value_type=ToolValueType.STRING,
+                description="Optional visible context for disambiguation.",
+                required=False,
+                max_length=240,
+            ),
+        )
+    )
+    output_schema: ToolOutputSchema = ToolOutputSchema(
+        fields=(
+            *_browser_action_output_schema().fields,
+            ToolFieldSchema(
+                "resolution",
+                ToolValueType.OBJECT,
+                "Semantic field selected for filling.",
+            ),
+            ToolFieldSchema(
+                "transition",
+                ToolValueType.OBJECT,
+                "Semantic page transition detected after filling.",
+            ),
+        )
+    )
+    timeout_seconds: float = 20.0
+
+    async def execute(
+        self,
+        arguments: dict[str, object],
+        context: ToolContext,
+    ) -> ToolExecutionOutcome:
+        browser = _require_browser(context)
+        observation_engine = _require_observation_engine(context)
+        resolver = SemanticNavigationResolver()
+        before = await observation_engine.observe()
+        resolution = resolver.resolve_form_field(
+            before,
+            str(arguments["label"]),
+            _optional_argument(arguments, "context"),
+        )
+        if not resolution.is_resolved:
+            return _resolution_failure(resolution)
+
+        result = await browser.fill_by_semantic_id(
+            resolution.selected.element_id,
+            str(arguments["value"]),
+        )
+        recovered = False
+        if result.error_code == "semantic_element_not_found":
+            refreshed = await observation_engine.observe()
+            remapped = resolver.resolve_form_field(
+                refreshed,
+                str(arguments["label"]),
+                _optional_argument(arguments, "context"),
+            )
+            if remapped.is_resolved:
+                resolution = remapped
+                recovered = True
+                result = await browser.fill_by_semantic_id(
+                    resolution.selected.element_id,
+                    str(arguments["value"]),
+                )
+
+        after = await observation_engine.observe()
+        return _outcome_from_semantic_action(
+            result,
+            resolution=resolution,
+            transition=resolver.detect_transition(before, after),
+            recovered_from_stale=recovered,
+        )
+
+
+@dataclass(frozen=True)
+class PlanFormFillTool:
+    name: str = "browser.plan_form_fill"
+    description: str = (
+        "Plan generic form filling by matching requested labels to semantic field IDs."
+    )
+    input_schema: ToolInputSchema = ToolInputSchema(
+        fields=(
+            ToolFieldSchema(
+                name="field_labels",
+                value_type=ToolValueType.ARRAY,
+                description="Field labels or accessible names to map to current form fields.",
+            ),
+        )
+    )
+    output_schema: ToolOutputSchema = ToolOutputSchema(
+        fields=(
+            ToolFieldSchema(
+                "form_fill_plan",
+                ToolValueType.OBJECT,
+                "Field label to semantic ID mapping without field values.",
+            ),
+        )
+    )
+    timeout_seconds: float = 10.0
+
+    async def execute(
+        self,
+        arguments: dict[str, object],
+        context: ToolContext,
+    ) -> ToolExecutionOutcome:
+        observation_engine = _require_observation_engine(context)
+        labels = [str(item) for item in arguments["field_labels"]]
+        observation = await observation_engine.observe()
+        plan = SemanticNavigationResolver().plan_form_fill(observation, labels)
+        return ToolExecutionOutcome(
+            success=plan.is_complete,
+            message=(
+                "Form fill plan created."
+                if plan.is_complete
+                else "Some form fields could not be resolved safely."
+            ),
+            data={"form_fill_plan": plan.to_dict()},
+            failure_kind=None if plan.is_complete else ToolFailureKind.BROWSER,
+            retryable=not plan.is_complete,
+            error_code=None if plan.is_complete else "semantic_target_not_found",
+        )
 
 
 @dataclass(frozen=True)
@@ -283,6 +601,10 @@ def create_browser_tool_registry() -> ToolRegistry:
         NavigateTool(),
         ClickTool(),
         FillTool(),
+        ResolveSemanticTargetTool(),
+        ClickByIntentTool(),
+        FillByLabelTool(),
+        PlanFormFillTool(),
         PressKeyTool(),
         WaitTool(),
         ScreenshotTool(),
@@ -296,6 +618,12 @@ def _require_browser(context: ToolContext):
     if context.browser is None:
         raise RuntimeError("Browser engine is not configured.")
     return context.browser
+
+
+def _require_observation_engine(context: ToolContext):
+    if context.observation_engine is None:
+        raise RuntimeError("Observation engine is not configured.")
+    return context.observation_engine
 
 
 def _outcome_from_browser_action(result: BrowserActionResult) -> ToolExecutionOutcome:
@@ -313,6 +641,45 @@ def _outcome_from_browser_action(result: BrowserActionResult) -> ToolExecutionOu
         failure_kind=ToolFailureKind.BROWSER,
         retryable=_is_retryable_browser_error(result.error_code),
         error_code=result.error_code,
+    )
+
+
+def _outcome_from_semantic_action(
+    result: BrowserActionResult,
+    *,
+    resolution: SemanticResolution,
+    transition,
+    recovered_from_stale: bool,
+) -> ToolExecutionOutcome:
+    outcome = _outcome_from_browser_action(result)
+    data = {
+        **dict(outcome.data),
+        "resolution": resolution.to_dict(),
+        "transition": transition.to_dict(),
+        "recovered_from_stale": recovered_from_stale,
+    }
+    return ToolExecutionOutcome(
+        success=outcome.success,
+        message=outcome.message,
+        data=data,
+        failure_kind=outcome.failure_kind,
+        retryable=outcome.retryable,
+        error_code=outcome.error_code,
+    )
+
+
+def _resolution_failure(resolution: SemanticResolution) -> ToolExecutionOutcome:
+    error_code = {
+        SemanticResolutionStatus.AMBIGUOUS: "semantic_target_ambiguous",
+        SemanticResolutionStatus.INVALID: "semantic_resolution_invalid",
+    }.get(resolution.status, "semantic_target_not_found")
+    return ToolExecutionOutcome(
+        success=False,
+        message=resolution.message,
+        data={"resolution": resolution.to_dict()},
+        failure_kind=ToolFailureKind.BROWSER,
+        retryable=resolution.status is SemanticResolutionStatus.NOT_FOUND,
+        error_code=error_code,
     )
 
 
@@ -340,3 +707,21 @@ def _is_retryable_browser_error(error_code: str | None) -> bool:
     if error_code in RETRYABLE_BROWSER_CODES:
         return True
     return bool(error_code and (error_code.endswith("_timeout") or error_code.endswith("_error")))
+
+
+def _intent_from_arguments(arguments: Mapping[str, object]) -> NavigationIntent:
+    kind = NavigationIntentKind(str(arguments["kind"]))
+    return NavigationIntent(
+        kind=kind,
+        target=_optional_argument(arguments, "target"),
+        role=_optional_argument(arguments, "role"),
+        context=_optional_argument(arguments, "context"),
+    )
+
+
+def _optional_argument(arguments: Mapping[str, object], name: str) -> str | None:
+    value = arguments.get(name)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
