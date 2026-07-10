@@ -1,0 +1,11 @@
+from scout_pilot.cli.main import main
+
+
+def test_status_command_prints_russian_placeholder(capsys):
+    exit_code = main(["status"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "фундамент проекта готов" in captured.out
+    assert "Browser Engine подключен" in captured.out

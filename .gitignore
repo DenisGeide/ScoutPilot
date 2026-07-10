@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+ENV/
+
+# Browser/session artifacts
+.browser-profiles/
+.browser-sessions/
+.playwright/
+playwright-report/
+test-results/
+storage-state*.json
+cookies*.json
+session*.json
+tokens*.json
+
+# Private runtime outputs
+reports/private/
+reports/tmp/
+screenshots/private/
+*.private.png
+*.private.jpg
+*.private.jpeg
+*.private.webp
+*.har
+
+# Local prompt pack used to drive staged development
+promts/
+prompts/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
