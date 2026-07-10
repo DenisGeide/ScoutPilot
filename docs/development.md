@@ -12,6 +12,8 @@
 - Держать OpenAI/Anthropic SDK imports только внутри `scout_pilot.llm`.
 - Использовать mocked providers в автоматических тестах LLM layer.
 - Не вызывать реальные LLM API в детерминированных тестах.
+- Планировщик должен ссылаться на semantic tool capabilities, а не на CSS selectors, XPath, Playwright locators или hardcoded routes.
+- Replanning обязан сохранять уже выполненные шаги плана.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.

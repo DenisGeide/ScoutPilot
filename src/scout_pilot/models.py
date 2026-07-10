@@ -388,6 +388,24 @@ class PlanStep:
     goal: str
     status: PlanStepStatus = PlanStepStatus.PENDING
     tool_request: ToolRequest | None = None
+    step_id: str = field(default_factory=lambda: uuid4().hex)
+    tool_name: str | None = None
+    arguments: Mapping[str, Any] = field(default_factory=dict)
+    rationale: str | None = None
+    requires_confirmation: bool = False
+    is_uncertain: bool = False
+    uncertainty_reason: str | None = None
+    notes: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.step_id:
+            object.__setattr__(self, "step_id", uuid4().hex)
+        object.__setattr__(self, "arguments", dict(self.arguments))
+        if self.tool_request is not None:
+            if self.tool_name is None:
+                object.__setattr__(self, "tool_name", self.tool_request.name)
+            if not self.arguments:
+                object.__setattr__(self, "arguments", dict(self.tool_request.arguments))
 
 
 @dataclass(frozen=True)
@@ -396,10 +414,41 @@ class ExecutionPlan:
 
     task: UserTask
     steps: tuple[PlanStep, ...] = field(default_factory=tuple)
+    summary: str = ""
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    validation_errors: tuple[str, ...] = field(default_factory=tuple)
+    source: str = "planner"
+    observation_url: str | None = None
+    observation_summary: str | None = None
+    memory_summaries: tuple[str, ...] = field(default_factory=tuple)
+    is_fallback: bool = False
+    revision_reason: str | None = None
 
-    def __init__(self, task: UserTask, steps: Sequence[PlanStep] = ()) -> None:
+    def __init__(
+        self,
+        task: UserTask,
+        steps: Sequence[PlanStep] = (),
+        summary: str = "",
+        warnings: Sequence[str] = (),
+        validation_errors: Sequence[str] = (),
+        source: str = "planner",
+        observation_url: str | None = None,
+        observation_summary: str | None = None,
+        memory_summaries: Sequence[str] = (),
+        is_fallback: bool = False,
+        revision_reason: str | None = None,
+    ) -> None:
         object.__setattr__(self, "task", task)
         object.__setattr__(self, "steps", tuple(steps))
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "warnings", tuple(warnings))
+        object.__setattr__(self, "validation_errors", tuple(validation_errors))
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "observation_url", observation_url)
+        object.__setattr__(self, "observation_summary", observation_summary)
+        object.__setattr__(self, "memory_summaries", tuple(memory_summaries))
+        object.__setattr__(self, "is_fallback", is_fallback)
+        object.__setattr__(self, "revision_reason", revision_reason)
 
 
 @dataclass(frozen=True)
