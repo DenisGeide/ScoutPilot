@@ -49,24 +49,34 @@ git status --short
 
 ```powershell
 scout-pilot status
+scout-pilot profile-info
 ```
 
-3. Запустите runtime demo:
+3. При необходимости покажите persistent session вручную:
+
+```powershell
+scout-pilot profile-open --profile default --start-url https://example.com --headed
+```
+
+В живом интервью вместо `example.com` можно открыть сайт, где нужен вход, войти вручную и закрыть браузер. После этого `scout-pilot run --live` использует тот же default profile. Не показывайте пароли и не коммитьте профиль.
+
+4. Запустите runtime demo:
 
 ```powershell
 scout-pilot live-local-demo --headed --slow-mo-ms 120 --dashboard compact
 ```
 
-4. Во время записи отметьте:
+5. Во время записи отметьте:
 
 - браузер открывает локальный сайт на `127.0.0.1`;
 - терминал показывает текущую задачу, состояние runtime, выбранный tool и очищенные аргументы;
 - агент открывает результаты через семантические наблюдения, а не через CSS selectors или XPath;
 - несколько ссылок `Details` сначала дают ambiguity check;
+- persistent profile находится в ignored `.browser-profiles/`;
 - после чтения трех detail-страниц действие `Apply` не выполняется, а останавливается на Security Policy;
 - progress и confirmation output остаются на русском.
 
-5. После завершения покажите короткий фрагмент отчета:
+6. После завершения покажите короткий фрагмент отчета:
 
 ```powershell
 Get-Content reports/tmp/live-local-demo-report.json -Encoding UTF8 | Select-Object -First 80

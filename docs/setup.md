@@ -101,6 +101,30 @@ scout-pilot interactive --dry-run
 scout-pilot browser-smoke --headless --hold-seconds 0
 ```
 
+## Persistent profile для ручного входа
+
+Профиль браузера хранится локально и исключен из Git. Проверить текущий путь:
+
+```powershell
+scout-pilot profile-info
+```
+
+Открыть видимый браузер с default profile:
+
+```powershell
+scout-pilot profile-open --profile default --start-url https://example.com --headed
+```
+
+Демо-поток для сайтов с авторизацией:
+
+1. Запустите `profile-open`.
+2. Войдите на сайт вручную.
+3. Закройте браузер или нажмите Enter в терминале.
+4. Запустите `scout-pilot run --live` с тем же default profile.
+5. Агент продолжит из локальной logged-in session, если сайт сохранил ее в профиле.
+
+Проект не автоматизирует логин, не хранит пароли в коде и не экспортирует `storage-state` в репозиторий.
+
 Локальное runtime demo:
 
 ```powershell

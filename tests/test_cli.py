@@ -113,6 +113,50 @@ def test_provider_smoke_command_accepts_provider_choice():
     assert args.provider == "openai"
 
 
+def test_profile_info_command_accepts_profile_name():
+    parser = build_parser()
+
+    args = parser.parse_args(["profile-info", "--profile", "default"])
+
+    assert args.command == "profile-info"
+    assert args.profile == "default"
+
+
+def test_profile_open_command_accepts_start_url_and_headed_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "profile-open",
+            "--profile",
+            "default",
+            "--start-url",
+            "https://example.test",
+            "--headed",
+            "--hold-seconds",
+            "0",
+        ]
+    )
+
+    assert args.command == "profile-open"
+    assert args.profile == "default"
+    assert args.start_url == "https://example.test"
+    assert args.headed is True
+    assert args.hold_seconds == 0
+
+
+def test_profile_info_command_prints_git_ignore_status(capsys):
+    exit_code = main(["profile-info"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Профиль: default" in captured.out
+    assert "Путь профиля:" in captured.out
+    assert "Игнорируется Git: да" in captured.out
+    assert "Не коммитьте browser profile" in captured.out
+
+
 def test_provider_smoke_without_key_exits_nonzero(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

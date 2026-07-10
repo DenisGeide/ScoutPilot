@@ -46,6 +46,7 @@ Browser Engine:
 
 ```powershell
 scout-pilot browser-smoke --headless --hold-seconds 0
+scout-pilot profile-open --profile default --start-url https://example.com --headless --hold-seconds 0
 ```
 
 Runtime demo без живого сайта:

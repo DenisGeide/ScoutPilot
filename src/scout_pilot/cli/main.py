@@ -43,6 +43,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Провайдер для ручной smoke-проверки.",
     )
 
+    profile_info_parser = subparsers.add_parser(
+        "profile-info",
+        help="Показать путь persistent profile браузера и защиту от коммита.",
+    )
+    profile_info_parser.add_argument(
+        "--profile",
+        default="default",
+        help="Имя профиля. default использует SCOUT_PILOT_BROWSER_PROFILE_DIR.",
+    )
+
+    profile_open_parser = subparsers.add_parser(
+        "profile-open",
+        help="Открыть браузер с persistent profile для ручного входа на сайт.",
+    )
+    profile_open_parser.add_argument(
+        "--profile",
+        default="default",
+        help="Имя профиля. default использует SCOUT_PILOT_BROWSER_PROFILE_DIR.",
+    )
+    profile_open_parser.add_argument(
+        "--start-url",
+        required=True,
+        help="URL, который нужно открыть для ручного входа или проверки сессии.",
+    )
+    profile_open_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить браузер без видимого окна. Для демо обычно не нужен.",
+    )
+    profile_open_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно открыть видимое окно браузера. Это режим по умолчанию.",
+    )
+    profile_open_parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        help="Для smoke-проверки: закрыть браузер автоматически через N секунд.",
+    )
+
     run_parser = subparsers.add_parser(
         "run",
         help="Принять одну задачу на естественном языке и показать ход выполнения.",
@@ -347,6 +387,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "provider-smoke":
         return asyncio.run(_run_provider_smoke(args))
 
+    if args.command == "profile-info":
+        return _run_profile_info(args)
+
+    if args.command == "profile-open":
+        return asyncio.run(_run_profile_open(args))
+
     if args.command == "interactive":
         try:
             return asyncio.run(_run_interactive(args))
@@ -383,6 +429,7 @@ def _print_status(config: AppConfig) -> None:
     )
     print("Локальное scripted demo доступно через scout-pilot interview-demo.")
     print("Основное runtime demo доступно через scout-pilot live-local-demo.")
+    print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
@@ -433,6 +480,85 @@ async def _run_provider_smoke(args: argparse.Namespace) -> int:
     result = await run_provider_smoke(ProviderSmokeSettings(provider=args.provider))
     print(result.message_ru)
     return result.exit_code
+
+
+def _run_profile_info(args: argparse.Namespace) -> int:
+    from scout_pilot.cli.profiles import inspect_browser_profile
+
+    config = AppConfig.load()
+    try:
+        profile = inspect_browser_profile(config, profile=args.profile)
+    except ValueError as exc:
+        print(f"Не удалось проверить профиль: {exc}")
+        return 1
+
+    print(f"Профиль: {profile.name}")
+    print(f"Путь профиля: {profile.path.resolve()}")
+    print(f"Папка существует: {_yes_no_ru(profile.exists)}")
+    print(f"Игнорируется Git: {_yes_no_unknown_ru(profile.git_ignored)}")
+    print(
+        "Не коммитьте browser profile: внутри могут быть cookies, токены, "
+        "локальная история и состояние авторизации."
+    )
+    if profile.git_ignored is False:
+        print("Внимание: этот путь не закрыт .gitignore. Перед использованием добавьте его в ignore.")
+        return 1
+    return 0
+
+
+async def _run_profile_open(args: argparse.Namespace) -> int:
+    from scout_pilot.browser import (
+        BrowserEngineConfig,
+        BrowserEngineError,
+        PlaywrightBrowserEngine,
+    )
+    from scout_pilot.cli.profiles import inspect_browser_profile
+
+    config = AppConfig.load()
+    try:
+        profile = inspect_browser_profile(config, profile=args.profile)
+    except ValueError as exc:
+        print(f"Не удалось открыть профиль: {exc}")
+        return 1
+
+    if profile.git_ignored is False:
+        print("Профиль не открыт: путь не закрыт .gitignore.")
+        print(f"Путь профиля: {profile.path.resolve()}")
+        return 1
+    if profile.git_ignored is None:
+        print("Не удалось проверить .gitignore для профиля. Продолжаю осторожно.")
+
+    browser_settings = replace(
+        BrowserEngineConfig.from_app_config(config),
+        user_data_dir=profile.path,
+        headless=True if args.headless else False,
+    )
+    if args.headed:
+        browser_settings = replace(browser_settings, headless=False)
+
+    engine = PlaywrightBrowserEngine(browser_settings)
+    print(f"Открываю профиль: {profile.name}")
+    print(f"Путь профиля: {profile.path.resolve()}")
+    print("Этот профиль локальный. Не коммитьте его и не экспортируйте storage state в репозиторий.")
+    try:
+        await engine.start()
+        result = await engine.navigate_to(args.start_url)
+        if not result.success:
+            print(f"Не удалось открыть страницу: {_browser_action_message_ru(result.error_code)}")
+            return 1
+        print(f"Страница открыта: {result.title or result.url or args.start_url}")
+        if args.hold_seconds is not None:
+            await asyncio.sleep(max(args.hold_seconds, 0))
+            return 0
+        print("Войдите на сайт вручную. Затем закройте окно браузера или нажмите Enter в терминале.")
+        await _wait_for_enter_or_browser_close(engine)
+        return 0
+    except BrowserEngineError as exc:
+        print(f"Не удалось запустить браузер с persistent profile: {exc}")
+        return 1
+    finally:
+        await engine.stop()
+        print("Браузер закрыт. Состояние профиля сохранено локально.")
 
 
 async def _run_interactive(args: argparse.Namespace) -> int:
@@ -665,6 +791,49 @@ async def _run_live_local_demo(args: argparse.Namespace) -> int:
         return 0
     print("Live local demo не дошло до ожидаемой остановки. Проверьте report/replay.")
     return 1
+
+
+async def _wait_for_enter_or_browser_close(engine: object) -> None:
+    while True:
+        state = await engine.current_state()
+        if not state.is_started:
+            print("Окно браузера закрыто.")
+            return
+        if _enter_pressed():
+            print("Получен Enter, закрываю браузер.")
+            return
+        await asyncio.sleep(0.25)
+
+
+def _enter_pressed() -> bool:
+    if not sys.stdin.isatty():
+        return False
+    if sys.platform.startswith("win"):
+        import msvcrt
+
+        while msvcrt.kbhit():
+            char = msvcrt.getwch()
+            if char in {"\r", "\n"}:
+                return True
+        return False
+
+    import select
+
+    readable, _, _ = select.select([sys.stdin], [], [], 0)
+    if not readable:
+        return False
+    sys.stdin.readline()
+    return True
+
+
+def _yes_no_ru(value: bool) -> str:
+    return "да" if value else "нет"
+
+
+def _yes_no_unknown_ru(value: bool | None) -> str:
+    if value is None:
+        return "не удалось проверить"
+    return _yes_no_ru(value)
 
 
 def _browser_action_message_ru(error_code: str | None) -> str:

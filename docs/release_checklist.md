@@ -14,6 +14,8 @@ python -m pytest -q
 scout-pilot status
 scout-pilot run "Проверить страницу" --dry-run --dashboard off
 scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
+scout-pilot profile-info
+scout-pilot profile-open --profile default --start-url https://example.com --headless --hold-seconds 0
 scout-pilot browser-smoke --headless --hold-seconds 0
 scout-pilot live-local-demo --headless --slow-mo-ms 0 --dashboard off
 scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
