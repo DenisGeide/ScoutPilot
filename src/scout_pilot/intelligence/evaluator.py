@@ -191,7 +191,13 @@ class DeterministicExecutionEvaluator:
 
         if _plan_validity(plan) is PlanValidity.INVALID:
             return True
-        if _has_issue(observation, PageIssueCode.BLOCKED_PAGE, PageIssueCode.NAVIGATION_ERROR):
+        if _has_issue(
+            observation,
+            PageIssueCode.BLOCKED_PAGE,
+            PageIssueCode.CAPTCHA_BLOCKING_PAGE,
+            PageIssueCode.LOGIN_WALL,
+            PageIssueCode.NAVIGATION_ERROR,
+        ):
             return True
         if _has_issue(observation, PageIssueCode.EMPTY_PAGE) and plan.steps:
             return True
@@ -330,8 +336,15 @@ def _failure_decision(
 def _action_for_page_issues(observation: PageObservation | None) -> RecoveryAction | None:
     if observation is None:
         return None
-    if _has_issue(observation, PageIssueCode.BLOCKED_PAGE):
+    if _has_issue(
+        observation,
+        PageIssueCode.BLOCKED_PAGE,
+        PageIssueCode.CAPTCHA_BLOCKING_PAGE,
+        PageIssueCode.LOGIN_WALL,
+    ):
         return RecoveryAction.STOP
+    if _has_issue(observation, PageIssueCode.REGION_PROMPT):
+        return RecoveryAction.REQUEST_CONFIRMATION
     if _has_issue(observation, PageIssueCode.NAVIGATION_ERROR):
         return RecoveryAction.REPLAN
     return None

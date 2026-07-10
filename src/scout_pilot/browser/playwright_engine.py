@@ -1119,7 +1119,19 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
   if (loadState !== "complete") issues.push("loading");
   if (!bodyText && interactiveElements.length === 0) issues.push("empty_page");
   const lowerBodyText = bodyText.toLowerCase();
-  if (/(access denied|forbidden|blocked|verify you are human|enable javascript)/.test(lowerBodyText)) {
+  if (/(cookie|cookies|consent|privacy settings|accept all|reject all|файл(?:ы)? cookie|куки|согласие|конфиденциальност)/.test(lowerBodyText)) {
+    issues.push("cookie_banner");
+  }
+  if (/(sign in|log in|login required|authentication required|create account|войдите|войти|авторизуйтесь|требуется вход|зарегистрируйтесь)/.test(lowerBodyText)) {
+    issues.push("login_wall");
+  }
+  if (/(captcha|recaptcha|hcaptcha|verify you are human|prove you are human|unusual traffic|robot|automated requests|проверьте,? что вы человек|проверка,? что вы человек|капч|робот|автоматическ(?:ие|их) запрос)/.test(lowerBodyText)) {
+    issues.push("captcha_blocking_page");
+  }
+  if (/(select (?:your )?(?:region|location|city|country)|choose (?:your )?(?:region|location|city|country)|allow location|use your location|geolocation|выберите (?:регион|город|страну|локацию)|определить (?:местоположение|город)|разрешить доступ к местоположению)/.test(lowerBodyText)) {
+    issues.push("region_prompt");
+  }
+  if (/(access denied|forbidden|blocked|verify you are human|enable javascript|доступ запрещен|доступ ограничен|заблокировано|включите javascript)/.test(lowerBodyText)) {
     issues.push("blocked_page");
   }
 

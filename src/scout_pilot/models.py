@@ -86,6 +86,11 @@ class PageIssueCode(str, Enum):
 
     LOADING = "loading"
     EMPTY_PAGE = "empty_page"
+    MODAL_DIALOG = "modal_dialog"
+    COOKIE_BANNER = "cookie_banner"
+    LOGIN_WALL = "login_wall"
+    CAPTCHA_BLOCKING_PAGE = "captcha_blocking_page"
+    REGION_PROMPT = "region_prompt"
     BLOCKED_PAGE = "blocked_page"
     NAVIGATION_ERROR = "navigation_error"
     OBSERVATION_TRUNCATED = "observation_truncated"

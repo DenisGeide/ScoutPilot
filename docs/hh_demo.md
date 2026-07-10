@@ -78,4 +78,4 @@ python -m pytest tests/test_demo_vacancy_search.py
 
 Live HH.ru может показать CAPTCHA, страницу входа, выбор региона, A/B-разметку или временно изменить интерфейс. Это нормальная причина для остановки или неполного отчета. Демо не должно создавать выдуманные вакансии, скриншоты или доказательства успеха.
 
-Если отчет содержит `blocked_page`, `empty_page`, `no_candidates` или `confirmation_required`, это рабочий результат проверки безопасности и наблюдаемости, а не повод обходить политику.
+Если отчет содержит `captcha_blocking_page`, `login_wall`, `region_prompt`, `cookie_banner`, `blocked_page`, `empty_page`, `no_candidates` или `confirmation_required`, это рабочий результат проверки безопасности и наблюдаемости, а не повод обходить политику.

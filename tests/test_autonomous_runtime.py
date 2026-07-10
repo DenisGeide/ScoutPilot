@@ -16,6 +16,8 @@ from scout_pilot.memory import HierarchicalMemory
 from scout_pilot.models import (
     ExecutionPlan,
     InteractiveElement,
+    PageIssue,
+    PageIssueCode,
     PageObservation,
     PlanStep,
     RuntimeStatus,
@@ -288,6 +290,52 @@ def test_runtime_observes_again_after_noop_without_consuming_failure_limit():
     assert reflection.details["metrics"]["consecutive_no_progress_count"] == 1
 
 
+def test_runtime_stops_on_captcha_blocker_before_provider_or_tools():
+    provider = MockLlmProvider([_tool_call_result("test.click", {"target": "primary"})])
+    tool_runtime = FakeToolRuntime([])
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        tool_runtime,
+        HierarchicalMemory(),
+        observation_engine=BlockedObservationEngine(PageIssueCode.CAPTCHA_BLOCKING_PAGE),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Continue past blocker"))))
+    blocker_event = next(event for event in events if event.name == "page_blocker_detected")
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is False
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PAGE_BLOCKER
+    assert blocker_event.details["blocker_type"] == "captcha_blocking_page"
+    assert blocker_event.details["stop"] is True
+    assert events[-1].name == "task_failed"
+    assert provider.requests == []
+    assert tool_runtime.requests == []
+
+
+def test_runtime_records_region_prompt_without_treating_it_as_captcha():
+    provider = MockLlmProvider([_text_result("Region prompt noted.")])
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([]),
+        HierarchicalMemory(),
+        observation_engine=BlockedObservationEngine(PageIssueCode.REGION_PROMPT),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Read page with region prompt"))))
+    blocker_event = next(event for event in events if event.name == "page_blocker_detected")
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Region prompt noted."
+    assert blocker_event.details["blocker_type"] == "region_prompt"
+    assert blocker_event.details["stop"] is False
+    assert blocker_event.details["requires_user_input"] is True
+    assert provider.requests
+
+
 def test_runtime_waits_for_confirmation_when_reasoning_requests_it():
     provider = MockLlmProvider([_text_result("NEED_CONFIRMATION: Submit form.")])
     runtime = _runtime(provider, FakePlanningEngine(), FakeToolRuntime([]), HierarchicalMemory())
@@ -544,6 +592,25 @@ class StaticObservationEngine:
             url="https://example.test/same",
             title="Same",
             summary="Same semantic state.",
+        )
+
+
+class BlockedObservationEngine:
+    def __init__(self, code: PageIssueCode):
+        self.code = code
+
+    async def observe(self):
+        return PageObservation(
+            url="https://example.test/blocked",
+            title="Blocked",
+            summary=f"Blocked by {self.code.value}.",
+            issues=[
+                PageIssue(
+                    self.code,
+                    "Synthetic blocker.",
+                    severity="warning",
+                )
+            ],
         )
 
 

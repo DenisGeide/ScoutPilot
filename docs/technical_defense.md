@@ -108,6 +108,7 @@ scout-pilot live-local-demo --headed --slow-mo-ms 120 --dashboard compact
 - браузер видимый, профиль persistent и исключен из Git;
 - поиск и открытие страниц идут через semantic tools, а не через selectors;
 - на динамичных страницах stale element ID не считается тупиковым крашем: tool повторно наблюдает страницу, remap-ит кандидат по semantic fingerprint и останавливается на ambiguity, если безопасно выбрать нельзя;
+- CAPTCHA, login wall, cookie/banner overlay, region prompt и modal dialog попадают в `PageIssue`; CAPTCHA/login wall останавливают runtime честно до LLM/tools, а blocker-событие сохраняется в report/replay без raw HTML;
 - выбранные tools, очищенные аргументы и Security Policy видны в terminal dashboard;
 - перед действием `Apply` появляется security pause;
 - report/replay сохраняются без raw HTML, cookies, tokens и browser profile data.

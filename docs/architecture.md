@@ -26,6 +26,7 @@ Scout Pilot устроен как набор независимых слоев. 
 - Реализация Playwright не должна выходить за пределы Browser Engine.
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
 - Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
+- Observation Engine классифицирует типовые blocker-сигналы (`modal_dialog`, `cookie_banner`, `login_wall`, `captcha_blocking_page`, `region_prompt`, `empty_page`, `loading`) по безопасному visible text и Browser Engine issue codes; raw HTML в модель, report и replay не попадает.
 - Universal Semantic Navigation работает только с `PageObservation` и provider-neutral tool contracts: он не знает Playwright, CSS selectors, XPath, DOM handles, hardcoded URLs или website-specific workflows.
 - Generic semantic tools (`browser.resolve_target`, `browser.click_by_intent`, `browser.fill_by_label`, `browser.plan_form_fill`) сначала разрешают намерение через observation IDs; неоднозначные цели возвращают structured failure вместо опасного угадывания.
 - Tool Runtime запускает deterministic Security Policy перед `tool.execute()` и не содержит provider-specific schema adapters.
@@ -45,6 +46,7 @@ Scout Pilot устроен как набор независимых слоев. 
 - Autonomous Agent Runtime не импортирует Playwright или provider SDKs; browser actions проходят только через Tool Runtime, reasoning — только через provider-neutral Reasoning Engine.
 - Runtime state transitions всегда имеют machine-readable reason и пишутся во внутренний structured log на английском.
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
+- Runtime выпускает `page_blocker_detected`: CAPTCHA/login/block pages завершают задачу с `page_blocker`, cookie/modal/region prompts фиксируются как наблюдаемые препятствия и не обходятся автоматически.
 - Runtime не продолжает автоматически после confirmation-required action: подтверждение только разрешает один следующий exact tool request.
 - Stale semantic IDs восстанавливаются через повторное observation и remap кандидата по semantic fingerprint: role, accessible name, visible text, локальный секционный контекст, location, target URL и form labels. Если свежих кандидатов несколько, tool возвращает structured ambiguity вместо угадывания.
 - Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.

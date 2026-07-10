@@ -26,6 +26,8 @@ from scout_pilot.models import (
     MemoryLayer,
     MemoryRecord,
     MemoryRecordKind,
+    PageIssue,
+    PageIssueCode,
     PageObservation,
     PlanStep,
     PlanStepStatus,
@@ -186,6 +188,46 @@ class AutonomousAgentRuntime:
                         "summary": observation.summary,
                     },
                 )
+                blocker_decision = _page_blocker_decision(observation)
+                if blocker_decision is not None:
+                    await self._remember_event(
+                        task_id,
+                        f"page_blocker_{iteration}_before_action",
+                        str(blocker_decision["memory_summary"]),
+                    )
+                    yield self._event(
+                        "page_blocker_detected",
+                        RuntimeStatus.FAILED
+                        if blocker_decision["stop"]
+                        else RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.page_blocker.detected",
+                        details=blocker_decision,
+                    )
+                    if blocker_decision["stop"]:
+                        result = await self._fail(
+                            task_id,
+                            task,
+                            progress,
+                            plan,
+                            TaskTerminationReason.PAGE_BLOCKER,
+                            str(blocker_decision["message"]),
+                            failure_count,
+                        )
+                        self.last_result = result
+                        yield self._event(
+                            "task_failed",
+                            RuntimeStatus.FAILED,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.task.failed",
+                            details={
+                                **_result_details(result),
+                                "page_blocker": blocker_decision,
+                            },
+                        )
+                        return
 
                 if self._cancel_requested:
                     event, result = await self._cancel(task_id, task, progress, plan)
@@ -439,6 +481,46 @@ class AutonomousAgentRuntime:
                         "summary": post_action_observation.summary,
                     },
                 )
+                blocker_decision = _page_blocker_decision(post_action_observation)
+                if blocker_decision is not None:
+                    await self._remember_event(
+                        task_id,
+                        f"page_blocker_{iteration}_after_action",
+                        str(blocker_decision["memory_summary"]),
+                    )
+                    yield self._event(
+                        "page_blocker_detected",
+                        RuntimeStatus.FAILED
+                        if blocker_decision["stop"]
+                        else RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.page_blocker.detected",
+                        details=blocker_decision,
+                    )
+                    if blocker_decision["stop"]:
+                        result = await self._fail(
+                            task_id,
+                            task,
+                            progress,
+                            plan,
+                            TaskTerminationReason.PAGE_BLOCKER,
+                            str(blocker_decision["message"]),
+                            failure_count,
+                        )
+                        self.last_result = result
+                        yield self._event(
+                            "task_failed",
+                            RuntimeStatus.FAILED,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.task.failed",
+                            details={
+                                **_result_details(result),
+                                "page_blocker": blocker_decision,
+                            },
+                        )
+                        return
 
                 evaluation = await self._evaluator.evaluate_step(
                     StepEvaluationContext(
@@ -1215,6 +1297,144 @@ def _runtime_status_for_state(state: AgentState) -> RuntimeStatus:
     return RuntimeStatus.RUNNING
 
 
+def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object] | None:
+    issue_codes = {issue.code for issue in observation.issues}
+    if not issue_codes:
+        return None
+
+    issue_details = [_page_issue_details(issue) for issue in observation.issues]
+    if PageIssueCode.CAPTCHA_BLOCKING_PAGE in issue_codes:
+        return _blocker_decision(
+            blocker_type="captcha_blocking_page",
+            runtime_response="stop",
+            message="Page requires CAPTCHA or human verification; runtime stops without bypassing it.",
+            message_ru=(
+                "Страница остановила автоматизацию проверкой CAPTCHA или подтверждением, что пользователь человек. "
+                "Агент не обходит CAPTCHA и не продолжает без ручного действия."
+            ),
+            issues=issue_details,
+            stop=True,
+            requires_user_input=True,
+            safe_dismiss_allowed=False,
+        )
+    if PageIssueCode.LOGIN_WALL in issue_codes:
+        return _blocker_decision(
+            blocker_type="login_wall",
+            runtime_response="stop",
+            message="Page requires manual login; runtime stops instead of automating credentials.",
+            message_ru=(
+                "Страница требует входа в аккаунт. Агент не автоматизирует логин и не просит вводить пароль в автоматическом режиме. "
+                "Войдите вручную через persistent profile и запустите задачу снова."
+            ),
+            issues=issue_details,
+            stop=True,
+            requires_user_input=True,
+            safe_dismiss_allowed=False,
+        )
+    if PageIssueCode.BLOCKED_PAGE in issue_codes:
+        return _blocker_decision(
+            blocker_type="blocked_page",
+            runtime_response="stop",
+            message="Page appears blocked or unavailable; runtime stops honestly.",
+            message_ru=(
+                "Страница выглядит заблокированной или недоступной для обычной автоматизации. "
+                "Агент остановился честно и записал причину в отчет."
+            ),
+            issues=issue_details,
+            stop=True,
+            requires_user_input=True,
+            safe_dismiss_allowed=False,
+        )
+    if PageIssueCode.REGION_PROMPT in issue_codes:
+        return _blocker_decision(
+            blocker_type="region_prompt",
+            runtime_response="ask_user_when_unclear",
+            message="Page asks for a region or location choice; runtime will not choose user preferences silently.",
+            message_ru=(
+                "Страница просит выбрать регион, город или доступ к местоположению. "
+                "Агент не выбирает такие настройки молча; если окно мешает, выберите вариант вручную или уточните задачу."
+            ),
+            issues=issue_details,
+            stop=False,
+            requires_user_input=True,
+            safe_dismiss_allowed=False,
+        )
+    if PageIssueCode.COOKIE_BANNER in issue_codes:
+        return _blocker_decision(
+            blocker_type="cookie_banner",
+            runtime_response="safe_dismiss_if_generic_low_risk",
+            message="Cookie or consent banner detected; only generic low-risk dismiss actions are acceptable.",
+            message_ru=(
+                "Обнаружен cookie/consent баннер. Агент может закрыть только очевидное низкорисковое окно; "
+                "если действие неоднозначно, он должен остановиться или попросить подтверждение."
+            ),
+            issues=issue_details,
+            stop=False,
+            requires_user_input=False,
+            safe_dismiss_allowed=True,
+        )
+    if PageIssueCode.MODAL_DIALOG in issue_codes:
+        return _blocker_decision(
+            blocker_type="modal_dialog",
+            runtime_response="ask_user_when_unclear",
+            message="Visible modal dialog detected; runtime records it and proceeds only through normal safe tools.",
+            message_ru=(
+                "На странице видно модальное окно. Агент учтет его как возможный блокер и не будет угадывать опасное действие."
+            ),
+            issues=issue_details,
+            stop=False,
+            requires_user_input=False,
+            safe_dismiss_allowed=True,
+        )
+    if PageIssueCode.EMPTY_PAGE in issue_codes or PageIssueCode.LOADING in issue_codes:
+        return _blocker_decision(
+            blocker_type="empty_or_loading_page",
+            runtime_response="observe_or_replan",
+            message="Page is empty or still loading; runtime records the issue before continuing.",
+            message_ru=(
+                "Страница пустая или еще загружается. Агент зафиксировал это в наблюдении и продолжит только если появится полезный контекст."
+            ),
+            issues=issue_details,
+            stop=False,
+            requires_user_input=False,
+            safe_dismiss_allowed=False,
+        )
+    return None
+
+
+def _blocker_decision(
+    *,
+    blocker_type: str,
+    runtime_response: str,
+    message: str,
+    message_ru: str,
+    issues: Sequence[Mapping[str, object]],
+    stop: bool,
+    requires_user_input: bool,
+    safe_dismiss_allowed: bool,
+) -> Mapping[str, object]:
+    return {
+        "blocker_type": blocker_type,
+        "runtime_response": runtime_response,
+        "message": message,
+        "message_ru": message_ru,
+        "issues": list(issues),
+        "issue_codes": [str(issue.get("code")) for issue in issues],
+        "stop": stop,
+        "requires_user_input": requires_user_input,
+        "safe_dismiss_allowed": safe_dismiss_allowed,
+        "memory_summary": f"Page blocker detected: {blocker_type}; response={runtime_response}; stop={stop}.",
+    }
+
+
+def _page_issue_details(issue: PageIssue) -> Mapping[str, object]:
+    return {
+        "code": issue.code.value,
+        "message": issue.message,
+        "severity": issue.severity,
+    }
+
+
 def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
     details = {
         "success": result.success,
@@ -1260,6 +1480,11 @@ def _user_message_ru_for_result(result: AgentTaskResult) -> str:
         return (
             "Не удалось получить надежное решение от LLM-провайдера. "
             "Проверьте настройки провайдера, ключи доступа и сеть, затем повторите задачу."
+        )
+    if result.termination_reason is TaskTerminationReason.PAGE_BLOCKER:
+        return (
+            "На странице обнаружен блокер: CAPTCHA, login wall, региональный запрос, модальное окно или похожее препятствие. "
+            "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
         )
     if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
         return "Достигнут лимит итераций. Попробуйте сузить задачу или начать с более конкретной страницы."

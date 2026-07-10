@@ -570,6 +570,8 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
         return f"Выбран инструмент {tool}."
     if event.name == "tool_execution_finished":
         return _tool_result_message(event)
+    if event.name == "page_blocker_detected":
+        return _page_blocker_message(event)
     if event.name == "confirmation_required":
         return _confirmation_message(event)
     if event.name == "confirmation_approved":
@@ -588,6 +590,8 @@ def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
         return f"Инструмент перед выполнением: {tool}; аргументы: {_safe_json(arguments or {})}"
     if event.name == "tool_execution_finished":
         return _tool_result_message(event)
+    if event.name == "page_blocker_detected":
+        return _page_blocker_message(event)
     if event.name == "confirmation_required":
         return _confirmation_message(event)
     if verbose and event.name == "reasoning_completed":
@@ -614,6 +618,14 @@ def _tool_result_message(event: RuntimeEvent) -> str:
         return f"Инструмент {tool} завершился успешно."
     message = event.details.get("message") or "подробности записаны в отчет."
     return f"Инструмент {tool} остановился: {message}"
+
+
+def _page_blocker_message(event: RuntimeEvent) -> str:
+    message = event.details.get("message_ru")
+    if isinstance(message, str) and message.strip():
+        return message
+    blocker_type = event.details.get("blocker_type") or "page_blocker"
+    return f"Обнаружен блокер страницы: {blocker_type}. Подробности сохранены в отчете."
 
 
 def _confirmation_message(event: RuntimeEvent) -> str:
@@ -774,6 +786,11 @@ def _result_message_ru(result) -> str:
         return (
             "Не удалось получить надежное решение от LLM-провайдера. Проверьте ключ, "
             "модель, лимиты и сеть, затем повторите задачу."
+        )
+    if result.termination_reason is TaskTerminationReason.PAGE_BLOCKER:
+        return (
+            "На странице обнаружен блокер: CAPTCHA, login wall, региональный запрос, модальное окно или похожее препятствие. "
+            "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
         )
     if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
         return "Достигнут лимит итераций. Попробуйте сузить задачу или задать стартовый URL."

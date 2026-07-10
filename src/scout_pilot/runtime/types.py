@@ -35,6 +35,7 @@ class TaskTerminationReason(str, Enum):
     MAX_FAILURES_EXCEEDED = "max_failures_exceeded"
     TOOL_FAILURE = "tool_failure"
     REASONING_FAILURE = "reasoning_failure"
+    PAGE_BLOCKER = "page_blocker"
     FATAL_ERROR = "fatal_error"
 
 

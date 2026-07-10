@@ -1,6 +1,7 @@
 import asyncio
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+from scout_pilot.browser.types import BrowserPageSnapshot
 from scout_pilot.models import PageIssueCode
 from scout_pilot.observation import ObservationSettings, SemanticObservationEngine
 
@@ -144,6 +145,65 @@ def test_empty_page_reports_empty_issue(tmp_path):
     assert PageIssueCode.EMPTY_PAGE in {issue.code for issue in observation.issues}
 
 
+def test_observation_classifies_common_blockers_without_raw_html(tmp_path):
+    html = """
+    <!doctype html>
+    <title>Blocked fixture</title>
+    <main>
+      <section>
+        <h1>Verify access</h1>
+        <p>Verify you are human before continuing. CAPTCHA check is required.</p>
+      </section>
+      <section>
+        <h2>Cookie settings</h2>
+        <p>We use cookies for privacy settings.</p>
+        <button>Accept all</button>
+      </section>
+      <section>
+        <h2>Location</h2>
+        <p>Select your region or city to continue.</p>
+      </section>
+      <form>
+        <label for="password">Password</label>
+        <input id="password" type="password" value="private-password">
+        <button>Sign in</button>
+      </form>
+    </main>
+    <dialog open aria-label="Information modal">
+      <p>Modal dialog text.</p>
+    </dialog>
+    """
+
+    observation = _observe_html(tmp_path, html)
+    codes = {issue.code for issue in observation.issues}
+    serialized = str(observation.to_llm_context()).casefold()
+
+    assert PageIssueCode.MODAL_DIALOG in codes
+    assert PageIssueCode.COOKIE_BANNER in codes
+    assert PageIssueCode.LOGIN_WALL in codes
+    assert PageIssueCode.CAPTCHA_BLOCKING_PAGE in codes
+    assert PageIssueCode.REGION_PROMPT in codes
+    assert PageIssueCode.BLOCKED_PAGE in codes
+    assert "<dialog" not in serialized
+    assert "<button" not in serialized
+    assert "private-password" not in serialized
+
+
+def test_loading_snapshot_reports_loading_issue():
+    engine = SemanticObservationEngine(FakeSnapshotBrowser(BrowserPageSnapshot(
+        url="https://example.test/loading",
+        title="Loading",
+        origin="https://example.test",
+        load_state="loading",
+        is_visible=True,
+        issues=("loading",),
+    )))
+
+    observation = asyncio.run(engine.observe())
+
+    assert PageIssueCode.LOADING in {issue.code for issue in observation.issues}
+
+
 def _observe_html(
     tmp_path,
     html: str,
@@ -172,3 +232,11 @@ def _observe_html(
             await browser.stop()
 
     return asyncio.run(scenario())
+
+
+class FakeSnapshotBrowser:
+    def __init__(self, snapshot: BrowserPageSnapshot):
+        self.snapshot = snapshot
+
+    async def capture_semantic_snapshot(self) -> BrowserPageSnapshot:
+        return self.snapshot

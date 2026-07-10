@@ -203,6 +203,45 @@ def test_live_cli_surfaces_security_pause_in_russian(tmp_path, monkeypatch):
     assert tool_events[-1]["details"]["tool_status"] == "paused"
 
 
+def test_live_cli_records_page_blocker_without_raw_html(tmp_path):
+    site_root = _write_captcha_blocker_site(tmp_path / "blocker-site")
+    messages: list[str] = []
+
+    with LocalDemoServer(site_root) as server:
+        result = asyncio.run(
+            run_cli_task(
+                CliTaskSettings(
+                    task="Проверь страницу и остановись, если она заблокирована",
+                    dry_run=False,
+                    report_path=tmp_path / "blocker-report.json",
+                    replay_path=tmp_path / "blocker-replay.json",
+                    dashboard="off",
+                    provider="mock",
+                    start_url=server.url_for("index.html"),
+                    max_iterations=2,
+                    headless=True,
+                ),
+                progress=messages.append,
+            )
+        )
+
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+    blocker_events = [
+        event for event in report["events"] if event["name"] == "page_blocker_detected"
+    ]
+
+    assert result.success is False
+    assert "блокер" in result.message_ru.casefold()
+    assert blocker_events
+    assert blocker_events[-1]["details"]["blocker_type"] == "captcha_blocking_page"
+    assert "captcha_blocking_page" in blocker_events[-1]["details"]["issue_codes"]
+    assert any("CAPTCHA" in message or "блокер" in message.casefold() for message in messages)
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+    assert "browser profile" not in serialized
+
+
 def test_live_cli_interactive_confirmation_resumes_one_action(tmp_path, monkeypatch):
     provider = _ApplyConfirmationProvider()
     monkeypatch.setattr(task_session, "_create_provider", lambda _name, _config: provider)
@@ -416,6 +455,29 @@ def _write_apply_site(root: Path) -> Path:
     <h1>AI Engineer</h1>
     <p>This deterministic page contains one external-side-effect style action.</p>
     <button type="button" aria-label="Apply" onclick="document.body.dataset.clicked='true'; document.title='Applied locally'">Apply</button>
+  </main>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
+def _write_captcha_blocker_site(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "index.html").write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Human check</title>
+</head>
+<body>
+  <main>
+    <h1>Verify you are human</h1>
+    <p>CAPTCHA check is required before continuing.</p>
+    <button type="button">Continue</button>
   </main>
 </body>
 </html>

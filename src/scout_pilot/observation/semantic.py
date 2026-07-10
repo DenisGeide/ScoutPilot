@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,36 @@ from scout_pilot.semantic_ids import (
 
 if TYPE_CHECKING:
     from scout_pilot.config import AppConfig
+
+
+_COOKIE_PATTERN = re.compile(
+    r"\b(cookie|cookies|consent|privacy settings|accept all|reject all|"
+    r"файл(?:ы)? cookie|куки|согласие|конфиденциальност)\b",
+    re.IGNORECASE,
+)
+_LOGIN_PATTERN = re.compile(
+    r"\b(sign in|log in|login required|authentication required|create account|"
+    r"войдите|войти|авторизуйтесь|требуется вход|зарегистрируйтесь)\b",
+    re.IGNORECASE,
+)
+_CAPTCHA_PATTERN = re.compile(
+    r"\b(captcha|recaptcha|hcaptcha|verify you are human|prove you are human|"
+    r"unusual traffic|robot|automated requests|провер(?:ьте|ка),? что вы человек|"
+    r"капч|робот|автоматическ(?:ие|их) запрос)\b",
+    re.IGNORECASE,
+)
+_REGION_PATTERN = re.compile(
+    r"\b(select (?:your )?(?:region|location|city|country)|choose (?:your )?(?:region|location|city|country)|"
+    r"allow location|use your location|geolocation|"
+    r"выберите (?:регион|город|страну|локацию)|определить (?:местоположение|город)|"
+    r"разрешить доступ к местоположению)\b",
+    re.IGNORECASE,
+)
+_BLOCKED_PATTERN = re.compile(
+    r"\b(access denied|forbidden|blocked|temporarily unavailable|enable javascript|"
+    r"доступ запрещен|доступ ограничен|заблокировано|включите javascript)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -292,6 +323,8 @@ class SemanticObservationEngine:
             if issue is not None:
                 issues.append(issue)
 
+        issues.extend(_classify_blocker_issues(snapshot))
+
         if not snapshot.sections and not snapshot.interactive_elements and "empty_page" not in snapshot.issues:
             issues.append(
                 PageIssue(
@@ -445,6 +478,94 @@ def _issue_from_browser_code(code: str) -> PageIssue | None:
             severity="warning",
         )
     return None
+
+
+def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
+    text = _snapshot_visible_text(snapshot)
+    issues: list[PageIssue] = []
+    if snapshot.dialogs:
+        issues.append(
+            PageIssue(
+                PageIssueCode.MODAL_DIALOG,
+                "A visible modal or dialog is present.",
+                severity="warning",
+            )
+        )
+    if _COOKIE_PATTERN.search(text):
+        issues.append(
+            PageIssue(
+                PageIssueCode.COOKIE_BANNER,
+                "Visible text looks like a cookie or consent banner.",
+                severity="warning",
+            )
+        )
+    if _LOGIN_PATTERN.search(text) or _has_password_field(snapshot):
+        issues.append(
+            PageIssue(
+                PageIssueCode.LOGIN_WALL,
+                "The page appears to require a manual login or account access.",
+                severity="warning",
+            )
+        )
+    if _CAPTCHA_PATTERN.search(text):
+        issues.append(
+            PageIssue(
+                PageIssueCode.CAPTCHA_BLOCKING_PAGE,
+                "The page appears to require a CAPTCHA or human verification.",
+                severity="warning",
+            )
+        )
+    if _REGION_PATTERN.search(text):
+        issues.append(
+            PageIssue(
+                PageIssueCode.REGION_PROMPT,
+                "The page appears to ask for region, city or location selection.",
+                severity="warning",
+            )
+        )
+    if _BLOCKED_PATTERN.search(text):
+        issues.append(
+            PageIssue(
+                PageIssueCode.BLOCKED_PAGE,
+                "Page text suggests the user may be blocked or challenged.",
+                severity="warning",
+            )
+        )
+    return issues
+
+
+def _snapshot_visible_text(snapshot: BrowserPageSnapshot) -> str:
+    parts: list[str] = []
+    for section in snapshot.sections:
+        parts.extend((section.role, section.heading or "", section.text))
+    for element in snapshot.interactive_elements:
+        parts.extend(
+            (
+                element.role,
+                element.accessible_name or "",
+                element.visible_text or "",
+                element.input_type or "",
+            )
+        )
+    for field in snapshot.form_fields:
+        parts.extend(
+            (
+                field.role,
+                field.input_type or "",
+                field.label or "",
+                field.placeholder or "",
+                field.field_name or "",
+            )
+        )
+    for dialog in snapshot.dialogs:
+        parts.extend((dialog.role, dialog.title or "", dialog.text))
+    if snapshot.title:
+        parts.append(snapshot.title)
+    return " ".join(parts)
+
+
+def _has_password_field(snapshot: BrowserPageSnapshot) -> bool:
+    return any(field.input_type == "password" for field in snapshot.form_fields)
 
 
 def _copy_observation_with(
