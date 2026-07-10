@@ -86,6 +86,7 @@ scout-pilot interactive --dry-run
 Локальная проверка demo flow без живого сайта:
 
 ```powershell
+scout-pilot live-local-demo --headless --slow-mo-ms 0 --dashboard off
 python -m pytest tests/test_demo_vacancy_search.py
 ```
 

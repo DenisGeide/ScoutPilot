@@ -101,7 +101,13 @@ scout-pilot interactive --dry-run
 scout-pilot browser-smoke --headless --hold-seconds 0
 ```
 
-Локальное interview demo:
+Локальное runtime demo:
+
+```powershell
+scout-pilot live-local-demo --headless --slow-mo-ms 0 --dashboard off
+```
+
+Scripted interview demo:
 
 ```powershell
 scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50

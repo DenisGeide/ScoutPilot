@@ -15,6 +15,7 @@ scout-pilot status
 scout-pilot run "Проверить страницу" --dry-run --dashboard off
 scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 scout-pilot browser-smoke --headless --hold-seconds 0
+scout-pilot live-local-demo --headless --slow-mo-ms 0 --dashboard off
 scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 ```
 
@@ -45,7 +46,7 @@ rg -n "hh\.ru|/vacancy|/jobs|/search|xpath|queryselector|locator\(" src\scout_pi
 - `reports/tmp/`, `reports/private/`, приватные screenshots и `.har`;
 - live HH.ru evidence, если оно содержит приватные данные или raw HTML.
 
-Очищенные demo/replay артефакты сейчас намеренно не хранятся в репозитории. Локальное `interview-demo` генерирует их заново в ignored `reports/tmp/`.
+Очищенные demo/replay артефакты сейчас намеренно не хранятся в репозитории. Локальные `live-local-demo` и `interview-demo` генерируют их заново в ignored `reports/tmp/`.
 
 ## GitHub перед публикацией
 
@@ -72,7 +73,7 @@ git push -u origin main
 
 Состояние проекта:
 
-- готов для клонирования, чтения, локального запуска тестов и interview demo;
+- готов для клонирования, чтения, локального запуска тестов и runtime-driven `live-local-demo`;
 - не заявляет готовность к реальной эксплуатации;
 - `scout-pilot run` по умолчанию остается dry-run, а `scout-pilot run --live` запускает основной runtime loop;
 - live HH.ru smoke выполняется вручную и может остановиться на CAPTCHA, login, регионе или измененной странице;

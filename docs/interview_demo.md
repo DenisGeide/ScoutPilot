@@ -1,39 +1,41 @@
 # Interview demo
 
-Этот сценарий нужен для короткого видео или live-показа на интервью. Он показывает общий Browser Agent на локальных тестовых страницах, без аккаунтов, реальных вакансий, live LLM-вызовов и отправки данных.
+Основной локальный показ для интервью — `scout-pilot live-local-demo`. Он поднимает синтетический сайт на `127.0.0.1`, запускает обычный autonomous runtime и использует mock provider, поэтому не требует API-ключей, аккаунтов и живого HH.ru.
 
-## Что показывает локальное demo
+Старый `interview-demo` оставлен как scripted fallback. Его удобно держать под рукой, но для видео лучше начинать с `live-local-demo`, потому что там виден цикл observe-think-plan-act-evaluate.
 
-- запуск видимого браузера через Browser Engine;
-- отдельный persistent profile в `.browser-profiles/interview-demo`;
-- семантические наблюдения страницы без raw HTML;
-- выбор инструментов через Tool Runtime;
-- семантическую навигацию без CSS selectors, XPath и маршрутов сайта;
-- метрики бюджета контекста после наблюдений;
-- остановку безопасности перед кнопкой `Apply`;
-- итоговые заметки по трем найденным страницам;
-- JSON report и replay без cookies, tokens, browser profile data и значений чувствительных полей.
+## Что показывает `live-local-demo`
+
+- видимый браузер через Browser Engine;
+- отдельный persistent profile в `.browser-profiles/live-local-demo`;
+- семантические наблюдения без raw HTML;
+- выбор tools через Tool Runtime;
+- ambiguous `Details` links и безопасное `browser.resolve_target`;
+- переходы на три detail-страницы по обнаруженным URL;
+- context budgeting, memory и reflection events в runtime report;
+- остановку Security Policy перед кнопкой `Apply`;
+- JSON report/replay без cookies, tokens, browser profile data, raw HTML и чувствительных значений.
 
 ## Локальный запуск
 
-Для записи видео лучше использовать видимый браузер:
+Для записи видео:
 
 ```powershell
-scout-pilot interview-demo --headed --slow-mo-ms 120
+scout-pilot live-local-demo --headed --slow-mo-ms 120 --dashboard compact
 ```
 
-Для быстрой детерминированной проверки без окна:
+Для быстрой проверки без окна:
 
 ```powershell
-scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
+scout-pilot live-local-demo --headless --slow-mo-ms 0 --dashboard off
 ```
 
 По умолчанию артефакты пишутся в ignored-папку:
 
-- `reports/tmp/interview-demo-report.json`;
-- `reports/tmp/interview-demo-replay.json`;
-- `reports/tmp/interview-demo-site/`;
-- `.browser-profiles/interview-demo/`.
+- `reports/tmp/live-local-demo-report.json`;
+- `reports/tmp/live-local-demo-replay.json`;
+- `reports/tmp/live-local-demo-site/`;
+- `.browser-profiles/live-local-demo/`.
 
 ## Чек-лист для короткого видео
 
@@ -49,27 +51,42 @@ git status --short
 scout-pilot status
 ```
 
-3. Запустите локальное demo:
+3. Запустите runtime demo:
+
+```powershell
+scout-pilot live-local-demo --headed --slow-mo-ms 120 --dashboard compact
+```
+
+4. Во время записи отметьте:
+
+- браузер открывает локальный сайт на `127.0.0.1`;
+- терминал показывает текущую задачу, состояние runtime, выбранный tool и очищенные аргументы;
+- агент открывает результаты через семантические наблюдения, а не через CSS selectors или XPath;
+- несколько ссылок `Details` сначала дают ambiguity check;
+- после чтения трех detail-страниц действие `Apply` не выполняется, а останавливается на Security Policy;
+- progress и confirmation output остаются на русском.
+
+5. После завершения покажите короткий фрагмент отчета:
+
+```powershell
+Get-Content reports/tmp/live-local-demo-report.json -Encoding UTF8 | Select-Object -First 80
+```
+
+В отчете должны быть runtime events, selected tools, context budget metrics, security pause и итоговая сводка. Полного HTML, cookies, tokens и browser profile data там быть не должно.
+
+## Scripted fallback
+
+Если нужно быстро показать старый deterministic flow без runtime-провайдера:
 
 ```powershell
 scout-pilot interview-demo --headed --slow-mo-ms 120
 ```
 
-4. Во время записи отметьте:
-
-- браузер открывает локальный тестовый сайт на `127.0.0.1`;
-- запрос вводится в поле поиска через семантическое описание;
-- результаты открываются по обнаруженным ссылкам;
-- отклик через `Apply` не выполняется, а останавливается на Security Policy;
-- CLI пишет прогресс на русском.
-
-5. После завершения покажите короткий фрагмент отчета:
+Для headless-проверки:
 
 ```powershell
-Get-Content reports/tmp/interview-demo-report.json -Encoding UTF8 | Select-Object -First 80
+scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 ```
-
-В отчете должны быть `summary`, `observation`, `selected_tool`, `context_budget`, `security_pause` и итоговая русская сводка. Полного HTML, cookies, tokens и browser profile data там быть не должно.
 
 ## Ручной live HH.ru smoke
 

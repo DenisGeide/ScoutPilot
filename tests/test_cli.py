@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
@@ -54,6 +55,32 @@ def test_interview_demo_command_parses_local_mode():
     assert args.headless is True
     assert args.slow_mo_ms == 0
     assert args.wait_after_search_ms == 50
+
+
+def test_live_local_demo_command_parses_runtime_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "live-local-demo",
+            "Найди",
+            "вакансии",
+            "--provider",
+            "mock",
+            "--headless",
+            "--max-iterations",
+            "8",
+            "--dashboard",
+            "verbose",
+        ]
+    )
+
+    assert args.command == "live-local-demo"
+    assert " ".join(args.task) == "Найди вакансии"
+    assert args.provider == "mock"
+    assert args.headless is True
+    assert args.max_iterations == 8
+    assert args.dashboard == "verbose"
 
 
 def test_run_command_accepts_natural_language_task():
@@ -215,3 +242,91 @@ def test_interview_demo_runs_local_synthetic_site(tmp_path, capsys):
     assert "<button" not in serialized
     assert "token=" not in serialized
     assert "cookie" not in serialized
+
+
+def test_live_local_demo_runs_through_autonomous_runtime(tmp_path, capsys):
+    report_path = tmp_path / "live-local-report.json"
+    replay_path = tmp_path / "live-local-replay.json"
+
+    exit_code = main(
+        [
+            "live-local-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--site-dir",
+            str(tmp_path / "site"),
+            "--profile-dir",
+            str(tmp_path / "profile"),
+            "--report-path",
+            str(report_path),
+            "--replay-path",
+            str(replay_path),
+            "--dashboard",
+            "off",
+            "--max-iterations",
+            "8",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+    event_names = [event["name"] for event in report["events"]]
+    selected_tools = [
+        event["details"].get("selected_tool")
+        for event in report["events"]
+        if event["name"] == "tool_selected"
+    ]
+    search_page_titles = {"Local AI Roles", "Local AI Role Matches"}
+    detail_titles = {
+        event["details"].get("title")
+        for event in report["events"]
+        if event["name"] in {"observation_captured", "post_action_observation_captured"}
+        and event["details"].get("title")
+        and event["details"].get("title") not in search_page_titles
+    }
+
+    assert exit_code == 0
+    assert "ожидаемая безопасная остановка" in captured.out
+    assert report["artifact_kind"] == "runtime_report"
+    assert replay["artifact_kind"] == "runtime_replay"
+    assert report["dry_run"] is False
+    assert "tool_execution_finished" in event_names
+    assert "confirmation_required" in event_names
+    assert "browser.click_by_intent" in selected_tools
+    assert "browser.resolve_target" in selected_tools
+    assert "browser.navigate" in selected_tools
+    assert len(detail_titles) == 3
+    assert any(
+        event["details"].get("tool_status") == "paused"
+        for event in report["events"]
+        if event["name"] == "tool_execution_finished"
+    )
+    assert "сравнение требований подготовлено" in serialized
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+    assert "cookie" not in serialized
+    assert "token=" not in serialized
+
+
+def test_live_local_demo_provider_uses_no_site_routes_or_selectors():
+    source_root = Path(__file__).resolve().parents[1] / "src" / "scout_pilot"
+    provider_source = (source_root / "llm" / "mock_provider.py").read_text(
+        encoding="utf-8"
+    ).casefold()
+    class_source = provider_source.split("class deterministiclocaldemomockprovider", 1)[1]
+    class_source = class_source.split("def _local_demo_plan_response", 1)[0]
+    forbidden = (
+        "detail-alpha",
+        "detail-beta",
+        "detail-gamma",
+        ".html",
+        "queryselector",
+        "locator(",
+        "xpath",
+    )
+
+    for term in forbidden:
+        assert term not in class_source

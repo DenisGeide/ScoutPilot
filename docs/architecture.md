@@ -19,7 +19,7 @@ Scout Pilot устроен как набор независимых слоев. 
 | Independent Security Policy Layer | `scout_pilot.security` | Детерминированно классифицирует tool requests как `safe`, `sensitive`, `destructive` или `external_side_effect`, требует подтверждение на русском и ведет audit trail. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском, поддерживает single-task dry-run, live autonomous run, interactive mode, compact/verbose dashboard, safe tool trace и structured logs. |
 | Reporting and replay | `scout_pilot.reporting` | Формирует HTML-free JSON-отчеты, фиксирует безопасные replay events, dashboard trace, выбранные tools, security pauses и итоговые заметки, редактирует чувствительные поля перед записью. |
-| Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. Локальный `interview-demo` генерирует тестовый сайт, а live HH.ru остается ручной smoke-проверкой. |
+| Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. Локальный `live-local-demo` проходит через обычный runtime loop, старый `interview-demo` остается scripted fallback, а live HH.ru остается ручной smoke-проверкой. |
 
 ## Правила границ
 
@@ -50,7 +50,7 @@ Scout Pilot устроен как набор независимых слоев. 
 - Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.
 - HH.ru допускается как live smoke target в документации, но не как source-code workflow: в `scout_pilot.demo` не должно быть HH.ru routes, CSS selectors, XPath или assumptions о внутренних путях сайта.
 - Demo reports включают компактные observations, tool decisions, security pauses и short notes; полный HTML, DOM dumps, cookies, tokens, profile data и значения чувствительных полей туда не попадают.
-- Interview demo дополнительно пишет replay и context budget metrics, чтобы reviewer видел наблюдения, решения, выбранные tools и security boundary без live credentials.
+- `live-local-demo` дополнительно пишет replay и context budget metrics, чтобы reviewer видел runtime observations, reasoning/tool decisions и security boundary без live credentials.
 - CLI dry-run и live sessions пишут runtime report и replay через `RuntimeReportRecorder`; sanitizer редактирует raw HTML, DOM-like поля, cookies, tokens, API keys, passwords, browser profile paths, absolute private paths, session state и private screenshots.
 - CLI dashboard строится только из `RuntimeEvent.details`, не читает Playwright, provider SDKs, raw HTML или browser session data. Та же безопасная dashboard trace попадает в report/replay, чтобы видео и артефакты показывали одни и те же tool decisions.
 - Verbose/debug CLI logs являются внутренними JSON-lines на английском; пользовательский прогресс и ошибки остаются на русском.

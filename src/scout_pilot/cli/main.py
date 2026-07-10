@@ -264,6 +264,66 @@ def build_parser() -> argparse.ArgumentParser:
         default=200,
         help="Сколько миллисекунд ждать после запуска поиска на тестовой странице.",
     )
+
+    live_local_parser = subparsers.add_parser(
+        "live-local-demo",
+        help="Запустить локальное live-demo через обычный автономный runtime.",
+    )
+    live_local_parser.add_argument(
+        "task",
+        nargs="*",
+        help="Текст задачи. Если не указан, используется стандартная задача про AI Engineer вакансии.",
+    )
+    live_local_parser.add_argument(
+        "--provider",
+        choices=("mock", "openai", "anthropic"),
+        default="mock",
+        help="LLM-провайдер. Для детерминированного demo используйте mock.",
+    )
+    live_local_parser.add_argument(
+        "--dashboard",
+        choices=("compact", "verbose", "off"),
+        default="compact",
+        help="Показывать компактную/подробную live-трассу инструментов.",
+    )
+    live_local_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        help="Максимум observe/think/tool итераций.",
+    )
+    live_local_parser.add_argument(
+        "--site-dir",
+        help="Куда сгенерировать локальный сайт. По умолчанию reports/tmp/live-local-demo-site.",
+    )
+    live_local_parser.add_argument(
+        "--profile-dir",
+        help="Постоянный профиль браузера. По умолчанию .browser-profiles/live-local-demo.",
+    )
+    live_local_parser.add_argument(
+        "--report-path",
+        help="Куда сохранить JSON-отчет. По умолчанию reports/tmp/live-local-demo-report.json.",
+    )
+    live_local_parser.add_argument(
+        "--replay-path",
+        help="Куда сохранить JSON replay. По умолчанию reports/tmp/live-local-demo-replay.json.",
+    )
+    live_local_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить demo без видимого окна.",
+    )
+    live_local_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно запустить видимое окно браузера. Это режим по умолчанию.",
+    )
+    live_local_parser.add_argument(
+        "--slow-mo-ms",
+        type=int,
+        default=80,
+        help="Небольшая задержка действий браузера для записи видео.",
+    )
     return parser
 
 
@@ -303,6 +363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "interview-demo":
         return asyncio.run(_run_interview_demo(args))
 
+    if args.command == "live-local-demo":
+        return asyncio.run(_run_live_local_demo(args))
+
     parser.print_help()
     return 0
 
@@ -318,7 +381,8 @@ def _print_status(config: AppConfig) -> None:
         "Live-режим запускается через scout-pilot run \"текст задачи\" --live "
         "--start-url <URL>. Для детерминированной проверки используйте --provider mock."
     )
-    print("Локальное демо для интервью доступно через scout-pilot interview-demo.")
+    print("Локальное scripted demo доступно через scout-pilot interview-demo.")
+    print("Основное runtime demo доступно через scout-pilot live-local-demo.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
@@ -543,6 +607,63 @@ async def _run_interview_demo(args: argparse.Namespace) -> int:
         print("Локальное демо для интервью завершено. Реальные отклики и сообщения не отправлялись.")
         return 0
     print("Демо остановилось. Проверьте отчет и replay, чтобы увидеть причину.")
+    return 1
+
+
+async def _run_live_local_demo(args: argparse.Namespace) -> int:
+    from scout_pilot.demo import (
+        DEFAULT_LIVE_LOCAL_TASK,
+        LiveLocalDemoSettings,
+        run_live_local_demo,
+    )
+
+    config = AppConfig.load()
+    task_text = " ".join(args.task).strip() or DEFAULT_LIVE_LOCAL_TASK
+    settings = LiveLocalDemoSettings(
+        site_dir=(
+            Path(args.site_dir)
+            if args.site_dir
+            else Path("reports/tmp/live-local-demo-site")
+        ),
+        profile_dir=(
+            Path(args.profile_dir)
+            if args.profile_dir
+            else Path(".browser-profiles/live-local-demo")
+        ),
+        report_path=(
+            Path(args.report_path)
+            if args.report_path
+            else Path("reports/tmp/live-local-demo-report.json")
+        ),
+        replay_path=(
+            Path(args.replay_path)
+            if args.replay_path
+            else Path("reports/tmp/live-local-demo-replay.json")
+        ),
+        task=task_text,
+        provider=args.provider,
+        dashboard=args.dashboard,
+        max_iterations=args.max_iterations,
+        headless=True if args.headless else False,
+        slow_mo_ms=args.slow_mo_ms,
+    )
+    if args.headed:
+        settings = replace(settings, headless=False)
+
+    result = await run_live_local_demo(config, settings, progress=print)
+    print(result.message_ru)
+    print(f"Локальный сайт: {result.local_site_url}")
+    print(f"Отчет сохранен: {result.report_path}")
+    print(f"Replay-файл сохранен: {result.replay_path}")
+    print(
+        "Прочитано страниц: "
+        f"{result.detail_pages_read}. Проверок неоднозначности: {result.ambiguity_checks}. "
+        f"Пауз безопасности: {result.security_pause_count}."
+    )
+    if result.success:
+        print("Live local demo завершено как ожидаемая безопасная остановка перед внешним действием.")
+        return 0
+    print("Live local demo не дошло до ожидаемой остановки. Проверьте report/replay.")
     return 1
 
 

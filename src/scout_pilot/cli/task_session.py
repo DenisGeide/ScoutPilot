@@ -14,6 +14,7 @@ from scout_pilot.cli.dashboard import RuntimeDashboard
 from scout_pilot.config import AppConfig
 from scout_pilot.llm import (
     DeterministicBrowserMockProvider,
+    DeterministicLocalDemoMockProvider,
     LlmProviderConfig,
     LlmProviderName,
     ReasoningEngine,
@@ -50,6 +51,9 @@ class CliTaskSettings:
     provider: str | None = None
     max_iterations: int = 8
     headless: bool = False
+    browser_profile_dir: Path | None = None
+    slow_mo_ms: int | None = None
+    mock_provider_mode: str = "default"
 
     def __post_init__(self) -> None:
         if not self.task.strip():
@@ -60,6 +64,10 @@ class CliTaskSettings:
             raise ValueError("provider must be 'openai', 'anthropic' or 'mock'")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
+        if self.slow_mo_ms is not None and self.slow_mo_ms < 0:
+            raise ValueError("slow_mo_ms cannot be negative")
+        if self.mock_provider_mode not in {"default", "live_local_demo"}:
+            raise ValueError("mock_provider_mode must be 'default' or 'live_local_demo'")
 
 
 @dataclass(frozen=True)
@@ -140,7 +148,10 @@ async def _run_live_task(
     config = AppConfig.load()
     provider_name = settings.provider or config.llm_provider.casefold()
     try:
-        provider = _create_provider(provider_name, config)
+        if settings.mock_provider_mode == "default":
+            provider = _create_provider(provider_name, config)
+        else:
+            provider = _create_provider(provider_name, config, settings.mock_provider_mode)
     except Exception as exc:
         message_ru = _provider_start_error_ru(provider_name, exc)
         event = _event(
@@ -176,6 +187,10 @@ async def _run_live_task(
         BrowserEngineConfig.from_app_config(config),
         headless=settings.headless,
     )
+    if settings.browser_profile_dir is not None:
+        browser_settings = replace(browser_settings, user_data_dir=settings.browser_profile_dir)
+    if settings.slow_mo_ms is not None:
+        browser_settings = replace(browser_settings, slow_mo_ms=settings.slow_mo_ms)
     browser = PlaywrightBrowserEngine(browser_settings)
     observation_engine = SemanticObservationEngine(
         browser,
@@ -389,9 +404,15 @@ async def _execute_initial_navigation(
     return result
 
 
-def _create_provider(provider_name: str, config: AppConfig):
+def _create_provider(
+    provider_name: str,
+    config: AppConfig,
+    mock_provider_mode: str = "default",
+):
     normalized = provider_name.casefold()
     if normalized == "mock":
+        if mock_provider_mode == "live_local_demo":
+            return DeterministicLocalDemoMockProvider()
         return DeterministicBrowserMockProvider()
     provider = LlmProviderName(normalized)
     api_key = (
