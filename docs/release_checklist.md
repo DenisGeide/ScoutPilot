@@ -18,6 +18,12 @@ scout-pilot browser-smoke --headless --hold-seconds 0
 scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 ```
 
+Опционально, только с локальным ключом в `.env`:
+
+```powershell
+scout-pilot provider-smoke --provider openai
+```
+
 Архитектурные границы:
 
 ```powershell
@@ -70,6 +76,6 @@ git push -u origin main
 - не заявляет готовность к реальной эксплуатации;
 - `scout-pilot run` по умолчанию остается dry-run, а `scout-pilot run --live` запускает основной runtime loop;
 - live HH.ru smoke выполняется вручную и может остановиться на CAPTCHA, login, регионе или измененной странице;
-- live LLM provider calls не входят в автоматические тесты.
+- live LLM provider calls не входят в автоматические тесты; для них есть ручной `provider-smoke`.
 
 Тег релиза стоит создавать только после настройки GitHub remote и явного решения владельца проекта.

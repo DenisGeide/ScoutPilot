@@ -32,6 +32,17 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Показать готовность проекта и доступные команды.")
 
+    provider_smoke_parser = subparsers.add_parser(
+        "provider-smoke",
+        help="Вручную проверить live-интеграцию OpenAI или Anthropic без браузера.",
+    )
+    provider_smoke_parser.add_argument(
+        "--provider",
+        required=True,
+        choices=("openai", "anthropic"),
+        help="Провайдер для ручной smoke-проверки.",
+    )
+
     run_parser = subparsers.add_parser(
         "run",
         help="Принять одну задачу на естественном языке и показать ход выполнения.",
@@ -273,6 +284,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Задача отменена пользователем.")
             return 130
 
+    if args.command == "provider-smoke":
+        return asyncio.run(_run_provider_smoke(args))
+
     if args.command == "interactive":
         try:
             return asyncio.run(_run_interactive(args))
@@ -306,6 +320,7 @@ def _print_status(config: AppConfig) -> None:
     )
     print("Локальное демо для интервью доступно через scout-pilot interview-demo.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
+    print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
@@ -343,6 +358,17 @@ async def _run_task(args: argparse.Namespace) -> int:
         "можно повторить команду с --dry-run или --provider mock."
     )
     return 1
+
+
+async def _run_provider_smoke(args: argparse.Namespace) -> int:
+    from scout_pilot.cli.provider_smoke import (
+        ProviderSmokeSettings,
+        run_provider_smoke,
+    )
+
+    result = await run_provider_smoke(ProviderSmokeSettings(provider=args.provider))
+    print(result.message_ru)
+    return result.exit_code
 
 
 async def _run_interactive(args: argparse.Namespace) -> int:

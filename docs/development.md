@@ -71,6 +71,12 @@ scout-pilot --verbose run "Проверить страницу" --dry-run --dash
 scout-pilot run "Проверить страницу и подготовить краткий отчет" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 ```
 
+Опциональная ручная проверка live LLM-провайдера с ключом только в локальном `.env`:
+
+```powershell
+scout-pilot provider-smoke --provider openai
+```
+
 Интерактивный режим:
 
 ```powershell

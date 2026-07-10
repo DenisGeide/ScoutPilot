@@ -29,7 +29,7 @@
 - Planning Engine, Hierarchical Memory, Context Budgeting, Execution Intelligence и Autonomous Agent Runtime;
 - deterministic Security Policy с confirmation flow;
 - семантическая навигация по observation IDs, roles, names и visible context;
-- CLI на русском, `scout-pilot run --live`, локальное `interview-demo`, ручной HH.ru smoke flow, JSON report/replay;
+- CLI на русском, `scout-pilot run --live`, `provider-smoke`, локальное `interview-demo`, ручной HH.ru smoke flow, JSON report/replay;
 - детерминированные тесты на локальных тестовых страницах и mocked providers.
 
 Важно: `scout-pilot run` по умолчанию остается безопасным dry-run, но с флагом `--live` запускает основной автономный runtime loop: видимый браузер, semantic observation, planning/reasoning, Tool Runtime, Security Policy, memory, context budgeting, reflection и безопасные report/replay. Для локальной воспроизводимой проверки можно использовать `--provider mock`; OpenAI/Anthropic требуют локальные ключи вне репозитория.
@@ -115,6 +115,14 @@ scout-pilot demo-vacancy-search `
 
 HH.ru может показать CAPTCHA, вход, выбор региона или измененную страницу. Это ожидаемый результат smoke-теста, а не повод подделывать успешный отчет.
 
+Ручная проверка live LLM-провайдера отделена от браузерного demo:
+
+```powershell
+scout-pilot provider-smoke --provider openai
+```
+
+Команда читает только локальный `.env`, проверяет наличие нужного ключа и отправляет короткий provider-neutral запрос без браузерного состояния, HTML, cookies, tokens, профилей и приватных файлов. Для Anthropic используется `--provider anthropic` и модель, совместимая с Anthropic.
+
 ## Тестовая стратегия
 
 Автоматические тесты не ходят на HH.ru и не вызывают live OpenAI/Anthropic. Они используют:
@@ -155,7 +163,7 @@ rg -n "page\.content\(|inner_html|outer_html|innerHTML|outerHTML" src\scout_pilo
 
 ## Практичное future work
 
-- Добавить небольшой manual checklist для live provider smoke с тестовым ключом вне репозитория.
+- При необходимости расширить manual checklist для live provider smoke с разными моделями, не добавляя live-вызовы в CI.
 - Расширить observability для разборов live-сбоев: больше безопасных reason codes в report/replay без raw HTML.
 - Добавить больше локальных тестовых сайтов с другой разметкой, чтобы лучше проверять семантическую навигацию.
 

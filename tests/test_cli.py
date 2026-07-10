@@ -77,6 +77,28 @@ def test_run_command_accepts_natural_language_task():
     assert args.dashboard == "off"
 
 
+def test_provider_smoke_command_accepts_provider_choice():
+    parser = build_parser()
+
+    args = parser.parse_args(["provider-smoke", "--provider", "openai"])
+
+    assert args.command == "provider-smoke"
+    assert args.provider == "openai"
+
+
+def test_provider_smoke_without_key_exits_nonzero(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    exit_code = main(["provider-smoke", "--provider", "openai"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "API-ключ" in captured.out
+    assert ".env" in captured.out
+
+
 def test_run_live_command_accepts_provider_start_url_and_limits():
     parser = build_parser()
 

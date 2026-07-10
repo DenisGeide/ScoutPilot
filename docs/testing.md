@@ -34,6 +34,14 @@ scout-pilot run "Проверить страницу" --dry-run --dashboard off
 scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 ```
 
+Ручная проверка OpenAI/Anthropic вынесена в отдельную команду и не входит в CI:
+
+```powershell
+scout-pilot provider-smoke --provider openai
+```
+
+Если ключа в локальном `.env` нет, команда завершается с ненулевым кодом и понятным русским сообщением. В автоматических тестах это проверяется без live API-вызова.
+
 Browser Engine:
 
 ```powershell
