@@ -56,6 +56,9 @@ class SemanticCandidate:
     context: str | None = None
     target_url: str | None = None
     input_type: str | None = None
+    location_region: str | None = None
+    location_bucket: str | None = None
+    fingerprint: str | None = None
     score: int = 0
     reasons: tuple[str, ...] = ()
     disabled: bool = False
@@ -74,6 +77,9 @@ class SemanticCandidate:
             "context": self.context,
             "target_url": self.target_url,
             "input_type": self.input_type,
+            "location_region": self.location_region,
+            "location_bucket": self.location_bucket,
+            "fingerprint": self.fingerprint,
             "score": self.score,
             "reasons": list(self.reasons),
             "disabled": self.disabled,
@@ -158,6 +164,9 @@ class PageTransition:
     after_url: str | None = None
     before_title: str | None = None
     after_title: str | None = None
+    before_load_state: str | None = None
+    after_load_state: str | None = None
+    repeated: bool = False
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -167,4 +176,7 @@ class PageTransition:
             "after_url": self.after_url,
             "before_title": self.before_title,
             "after_title": self.after_title,
+            "before_load_state": self.before_load_state,
+            "after_load_state": self.after_load_state,
+            "repeated": self.repeated,
         }

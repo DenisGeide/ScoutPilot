@@ -7,9 +7,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from scout_pilot.models import (
+    ElementLocation,
     FormFieldSummary,
     InteractiveElement,
     PageObservation,
+    SemanticSection,
 )
 from scout_pilot.navigation.types import (
     FormFillPlan,
@@ -51,6 +53,9 @@ _CLICKABLE_ROLES = frozenset(
 _FIELD_ROLES = frozenset({"textbox", "combobox", "searchbox"})
 _DEFAULT_MIN_SCORE = 35
 _AMBIGUITY_MARGIN = 8
+_REMAP_MIN_SCORE = 65
+_MAIN_CONTENT_ROLES = frozenset({"main", "article", "region", "section", "form", "search"})
+_LOCAL_CONTEXT_ROLES = frozenset({"article", "region", "section", "form", "search", "dialog"})
 
 
 @dataclass(frozen=True)
@@ -100,7 +105,7 @@ class SemanticNavigationResolver:
         )
         requested_role = _normalize_role(role)
         candidates = [
-            _candidate_from_interactive(element)
+            _candidate_from_interactive(element, observation)
             for element in observation.interactive_elements
             if _is_click_candidate(element, requested_role)
         ]
@@ -137,7 +142,7 @@ class SemanticNavigationResolver:
 
         intent = NavigationIntent(NavigationIntentKind.FIELD, target=target, context=context)
         candidates = [
-            _candidate_from_field(field)
+            _candidate_from_field(field, observation)
             for field in observation.form_fields
             if _is_fillable_field(field)
         ]
@@ -161,7 +166,7 @@ class SemanticNavigationResolver:
     ) -> SemanticResolution:
         intent = NavigationIntent(NavigationIntentKind.SEARCH_FIELD, context=context)
         candidates = [
-            _candidate_from_field(field)
+            _candidate_from_field(field, observation)
             for field in observation.form_fields
             if _is_fillable_field(field)
         ]
@@ -204,6 +209,70 @@ class SemanticNavigationResolver:
             )
         return FormFillPlan(tuple(steps))
 
+    def remap_click_candidate(
+        self,
+        before: PageObservation,
+        after: PageObservation,
+        element_id: str,
+    ) -> SemanticResolution:
+        """Remap a stale interactive observation ID to a fresh semantic candidate."""
+
+        source = _interactive_candidate_by_id(before, element_id)
+        if source is None:
+            return SemanticResolution(
+                status=SemanticResolutionStatus.NOT_FOUND,
+                intent=NavigationIntent(NavigationIntentKind.CLICK),
+                message="Original semantic element ID was not present in the previous observation.",
+            )
+        candidates = [
+            _candidate_from_interactive(element, after)
+            for element in after.interactive_elements
+            if _is_click_candidate(element, source.role)
+        ]
+        return _remap_resolution_from_candidates(
+            source,
+            candidates,
+            NavigationIntent(
+                NavigationIntentKind.CLICK,
+                target=source.name or source.visible_text,
+                role=source.role,
+                context=source.context,
+            ),
+            ambiguity_margin=self.ambiguity_margin,
+        )
+
+    def remap_field_candidate(
+        self,
+        before: PageObservation,
+        after: PageObservation,
+        field_id: str,
+    ) -> SemanticResolution:
+        """Remap a stale form field observation ID to a fresh semantic field."""
+
+        source = _field_candidate_by_id(before, field_id)
+        if source is None:
+            return SemanticResolution(
+                status=SemanticResolutionStatus.NOT_FOUND,
+                intent=NavigationIntent(NavigationIntentKind.FIELD),
+                message="Original semantic field ID was not present in the previous observation.",
+            )
+        candidates = [
+            _candidate_from_field(field, after)
+            for field in after.form_fields
+            if _is_fillable_field(field)
+        ]
+        return _remap_resolution_from_candidates(
+            source,
+            candidates,
+            NavigationIntent(
+                NavigationIntentKind.FIELD,
+                target=source.name or source.visible_text,
+                role=source.role,
+                context=source.context,
+            ),
+            ambiguity_margin=self.ambiguity_margin,
+        )
+
     def detect_transition(
         self,
         before: PageObservation | None,
@@ -220,6 +289,8 @@ def detect_page_transition(
 
     if before is None or after is None:
         return PageTransition(changed=False, reason="observation_missing")
+    before_load_state = before.metadata.load_state if before.metadata else None
+    after_load_state = after.metadata.load_state if after.metadata else None
     if before.url != after.url:
         return PageTransition(
             changed=True,
@@ -228,6 +299,8 @@ def detect_page_transition(
             after_url=after.url,
             before_title=before.title,
             after_title=after.title,
+            before_load_state=before_load_state,
+            after_load_state=after_load_state,
         )
     if before.title != after.title:
         return PageTransition(
@@ -237,6 +310,30 @@ def detect_page_transition(
             after_url=after.url,
             before_title=before.title,
             after_title=after.title,
+            before_load_state=before_load_state,
+            after_load_state=after_load_state,
+        )
+    if before_load_state != after_load_state:
+        return PageTransition(
+            changed=True,
+            reason="load_state_changed",
+            before_url=before.url,
+            after_url=after.url,
+            before_title=before.title,
+            after_title=after.title,
+            before_load_state=before_load_state,
+            after_load_state=after_load_state,
+        )
+    if _main_content_signature(before) != _main_content_signature(after):
+        return PageTransition(
+            changed=True,
+            reason="main_content_changed",
+            before_url=before.url,
+            after_url=after.url,
+            before_title=before.title,
+            after_title=after.title,
+            before_load_state=before_load_state,
+            after_load_state=after_load_state,
         )
     if _observation_signature(before) != _observation_signature(after):
         return PageTransition(
@@ -246,14 +343,19 @@ def detect_page_transition(
             after_url=after.url,
             before_title=before.title,
             after_title=after.title,
+            before_load_state=before_load_state,
+            after_load_state=after_load_state,
         )
     return PageTransition(
         changed=False,
-        reason="semantic_state_unchanged",
+        reason="repeated_observation",
         before_url=before.url,
         after_url=after.url,
         before_title=before.title,
         after_title=after.title,
+        before_load_state=before_load_state,
+        after_load_state=after_load_state,
+        repeated=True,
     )
 
 
@@ -347,8 +449,12 @@ def _score_candidate(
     if context_tokens:
         context_matches = context_tokens & text_tokens
         if context_matches:
-            score += 15 * len(context_matches)
+            score += 22 * len(context_matches)
             reasons.append("context_terms_match")
+
+    if candidate.location_bucket:
+        score += 3
+        reasons.append("location_available")
 
     if candidate.kind == "field" and candidate.input_type == "search":
         score += 15
@@ -384,29 +490,142 @@ def _score_search_field(
     return score, tuple(reasons)
 
 
-def _candidate_from_interactive(element: InteractiveElement) -> SemanticCandidate:
+def _remap_resolution_from_candidates(
+    source: SemanticCandidate,
+    candidates: Sequence[SemanticCandidate],
+    intent: NavigationIntent,
+    *,
+    ambiguity_margin: int,
+) -> SemanticResolution:
+    scored: list[SemanticCandidate] = []
+    for candidate in candidates:
+        score, reasons = _score_remap_candidate(source, candidate)
+        if score >= _REMAP_MIN_SCORE:
+            scored.append(_with_score(candidate, score, reasons))
+    return _resolution_from_scored(
+        intent,
+        scored,
+        ambiguity_margin=ambiguity_margin,
+        not_found_message="No fresh semantic candidate matched the stale element fingerprint.",
+    )
+
+
+def _score_remap_candidate(
+    source: SemanticCandidate,
+    candidate: SemanticCandidate,
+) -> tuple[int, tuple[str, ...]]:
+    if candidate.disabled:
+        return 0, ("disabled",)
+
+    score = 0
+    reasons: list[str] = []
+    if source.fingerprint and source.fingerprint == candidate.fingerprint:
+        score += 120
+        reasons.append("fingerprint_match")
+    if source.kind == candidate.kind:
+        score += 10
+        reasons.append("kind_match")
+    if source.role == candidate.role:
+        score += 20
+        reasons.append("role_match")
+    if _normalize(source.name or "") and _normalize(source.name or "") == _normalize(candidate.name or ""):
+        score += 60
+        reasons.append("name_match")
+    if _normalize(source.visible_text or "") and _normalize(source.visible_text or "") == _normalize(candidate.visible_text or ""):
+        score += 45
+        reasons.append("visible_text_match")
+    if source.target_url and source.target_url == candidate.target_url:
+        score += 40
+        reasons.append("target_url_match")
+    if source.input_type and source.input_type == candidate.input_type:
+        score += 15
+        reasons.append("input_type_match")
+    if source.location_bucket and source.location_bucket == candidate.location_bucket:
+        score += 15
+        reasons.append("location_bucket_match")
+    elif source.location_region and source.location_region == candidate.location_region:
+        score += 8
+        reasons.append("location_region_match")
+
+    source_tokens = _tokens(_candidate_text(source))
+    candidate_tokens = _tokens(_candidate_text(candidate))
+    token_overlap = source_tokens & candidate_tokens
+    if token_overlap:
+        score += min(len(token_overlap), 8) * 5
+        reasons.append("semantic_terms_overlap")
+    return score, tuple(reasons)
+
+
+def _candidate_from_interactive(
+    element: InteractiveElement,
+    observation: PageObservation,
+) -> SemanticCandidate:
+    location_region = element.location.region if element.location else None
+    location_bucket = _location_bucket(element.location)
+    context = _compact_context(
+        element.target_url,
+        location_region,
+        location_bucket,
+        _surrounding_section_text(observation.sections, element.location),
+    )
     return SemanticCandidate(
         candidate_id=element.element_id,
         kind="interactive",
         role=element.role,
         name=element.accessible_name or element.visible_text,
         visible_text=element.visible_text,
-        context=_compact_context(element.target_url, element.location.region if element.location else None),
+        context=context,
         target_url=element.target_url,
         input_type=element.input_type,
+        location_region=location_region,
+        location_bucket=location_bucket,
+        fingerprint=_fingerprint(
+            "interactive",
+            element.role,
+            element.accessible_name,
+            element.visible_text,
+            element.target_url,
+            element.input_type,
+            context,
+            location_bucket,
+        ),
         disabled=element.state.disabled,
     )
 
 
-def _candidate_from_field(field: FormFieldSummary) -> SemanticCandidate:
+def _candidate_from_field(
+    field: FormFieldSummary,
+    observation: PageObservation,
+) -> SemanticCandidate:
+    location_region = field.location.region if field.location else None
+    location_bucket = _location_bucket(field.location)
+    context = _compact_context(
+        field.field_name,
+        field.input_type,
+        location_region,
+        location_bucket,
+        _surrounding_section_text(observation.sections, field.location),
+    )
     return SemanticCandidate(
         candidate_id=field.field_id,
         kind="field",
         role=field.role,
         name=field.label or field.placeholder or field.field_name,
         visible_text=field.placeholder,
-        context=_compact_context(field.field_name, field.input_type),
+        context=context,
         input_type=field.input_type,
+        location_region=location_region,
+        location_bucket=location_bucket,
+        fingerprint=_fingerprint(
+            "field",
+            field.role,
+            field.label,
+            field.placeholder,
+            field.field_name,
+            field.input_type,
+            context,
+            location_bucket,
+        ),
         disabled=field.state.disabled or field.state.readonly,
     )
 
@@ -462,6 +681,8 @@ def _candidate_text(candidate: SemanticCandidate) -> str:
             candidate.context,
             candidate.target_url,
             candidate.input_type,
+            candidate.location_region,
+            candidate.location_bucket,
         )
         if part
     )
@@ -481,6 +702,9 @@ def _with_score(
         context=candidate.context,
         target_url=candidate.target_url,
         input_type=candidate.input_type,
+        location_region=candidate.location_region,
+        location_bucket=candidate.location_bucket,
+        fingerprint=candidate.fingerprint,
         score=score,
         reasons=tuple(reasons),
         disabled=candidate.disabled,
@@ -512,6 +736,87 @@ def _normalize(text: str) -> str:
 def _compact_context(*parts: str | None) -> str | None:
     text = " ".join(part for part in parts if part)
     return text or None
+
+
+def _interactive_candidate_by_id(
+    observation: PageObservation,
+    element_id: str,
+) -> SemanticCandidate | None:
+    for element in observation.interactive_elements:
+        if element.element_id == element_id:
+            return _candidate_from_interactive(element, observation)
+    return None
+
+
+def _field_candidate_by_id(
+    observation: PageObservation,
+    field_id: str,
+) -> SemanticCandidate | None:
+    for field in observation.form_fields:
+        if field.field_id == field_id:
+            return _candidate_from_field(field, observation)
+    return None
+
+
+def _surrounding_section_text(
+    sections: Sequence[SemanticSection],
+    location: ElementLocation | None,
+) -> str | None:
+    if not sections:
+        return None
+    location_region = location.region if location else None
+    matched = [
+        section
+        for section in sections
+        if location_region
+        and section.role in _LOCAL_CONTEXT_ROLES
+        and section.location
+        and section.location.region == location_region
+    ]
+    if not matched and location is not None:
+        matched = [
+            section
+            for section in sections
+            if section.role in _LOCAL_CONTEXT_ROLES
+            and section.location is not None
+            and _location_bucket(section.location) == _location_bucket(location)
+        ]
+    text = " ".join(
+        _compact_context(section.role, section.heading, section.text) or ""
+        for section in matched[:3]
+    )
+    return text[:600] or None
+
+
+def _location_bucket(location: ElementLocation | None) -> str | None:
+    if location is None or location.x_ratio is None or location.y_ratio is None:
+        return location.region if location else None
+    x_bucket = min(2, max(0, int(location.x_ratio * 3)))
+    y_bucket = min(2, max(0, int(location.y_ratio * 3)))
+    return f"{location.region}:{x_bucket}:{y_bucket}"
+
+
+def _fingerprint(*parts: object) -> str:
+    return _normalize(" ".join(str(part) for part in parts if part))
+
+
+def _main_content_signature(observation: PageObservation) -> tuple[object, ...]:
+    sections = tuple(
+        (section.role, section.heading, _normalize(section.text))
+        for section in observation.sections
+        if section.role in _MAIN_CONTENT_ROLES
+    )
+    if not sections:
+        sections = tuple(
+            (section.role, section.heading, _normalize(section.text))
+            for section in observation.sections[:6]
+        )
+    dialogs = tuple((dialog.role, dialog.title, _normalize(dialog.text)) for dialog in observation.dialogs)
+    return (
+        _normalize(observation.summary),
+        sections[:8],
+        dialogs[:4],
+    )
 
 
 def _observation_signature(observation: PageObservation) -> tuple[object, ...]:

@@ -107,6 +107,7 @@ scout-pilot live-local-demo --headed --slow-mo-ms 120 --dashboard compact
 - сайт локальный и тестовый, поэтому demo не зависит от CAPTCHA или чужой разметки;
 - браузер видимый, профиль persistent и исключен из Git;
 - поиск и открытие страниц идут через semantic tools, а не через selectors;
+- на динамичных страницах stale element ID не считается тупиковым крашем: tool повторно наблюдает страницу, remap-ит кандидат по semantic fingerprint и останавливается на ambiguity, если безопасно выбрать нельзя;
 - выбранные tools, очищенные аргументы и Security Policy видны в terminal dashboard;
 - перед действием `Apply` появляется security pause;
 - report/replay сохраняются без raw HTML, cookies, tokens и browser profile data.

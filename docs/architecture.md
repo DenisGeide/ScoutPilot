@@ -46,7 +46,7 @@ Scout Pilot устроен как набор независимых слоев. 
 - Runtime state transitions всегда имеют machine-readable reason и пишутся во внутренний structured log на английском.
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
 - Runtime не продолжает автоматически после confirmation-required action: подтверждение только разрешает один следующий exact tool request.
-- Stale semantic IDs восстанавливаются через повторное observation и remap кандидата по тому же website-neutral intent; старые DOM handles не сохраняются.
+- Stale semantic IDs восстанавливаются через повторное observation и remap кандидата по semantic fingerprint: role, accessible name, visible text, локальный секционный контекст, location, target URL и form labels. Если свежих кандидатов несколько, tool возвращает structured ambiguity вместо угадывания.
 - Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.
 - HH.ru допускается как live smoke target в документации, но не как source-code workflow: в `scout_pilot.demo` не должно быть HH.ru routes, CSS selectors, XPath или assumptions о внутренних путях сайта.
 - Demo reports включают компактные observations, tool decisions, security pauses и short notes; полный HTML, DOM dumps, cookies, tokens, profile data и значения чувствительных полей туда не попадают.

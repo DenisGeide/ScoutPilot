@@ -109,6 +109,7 @@ class ClickTool:
     )
     output_schema: ToolOutputSchema = _browser_action_output_schema()
     timeout_seconds: float = 10.0
+    stale_recovery_attempts: int = 1
 
     async def execute(
         self,
@@ -116,7 +117,40 @@ class ClickTool:
         context: ToolContext,
     ) -> ToolExecutionOutcome:
         browser = _require_browser(context)
-        result = await browser.click_by_semantic_id(str(arguments["element_id"]))
+        element_id = str(arguments["element_id"])
+        if context.observation_engine is None:
+            result = await browser.click_by_semantic_id(element_id)
+            return _outcome_from_browser_action(result)
+
+        observation_engine = context.observation_engine
+        resolver = SemanticNavigationResolver()
+        before = await observation_engine.observe()
+        result = await browser.click_by_semantic_id(element_id)
+        recovered = False
+        resolution: SemanticResolution | None = None
+        source_observation = before
+        source_id = element_id
+        for _ in range(max(0, self.stale_recovery_attempts)):
+            if not _is_stale_element_error(result.error_code):
+                break
+            refreshed = await observation_engine.observe()
+            remapped = resolver.remap_click_candidate(source_observation, refreshed, source_id)
+            if not remapped.is_resolved:
+                return _resolution_failure(remapped)
+            resolution = remapped
+            recovered = True
+            source_observation = refreshed
+            source_id = remapped.selected.element_id
+            result = await browser.click_by_semantic_id(source_id)
+
+        if recovered and resolution is not None:
+            after = await observation_engine.observe()
+            return _outcome_from_semantic_action(
+                result,
+                resolution=resolution,
+                transition=resolver.detect_transition(before, after),
+                recovered_from_stale=True,
+            )
         return _outcome_from_browser_action(result)
 
 
@@ -144,6 +178,7 @@ class FillTool:
     )
     output_schema: ToolOutputSchema = _browser_action_output_schema()
     timeout_seconds: float = 10.0
+    stale_recovery_attempts: int = 1
 
     async def execute(
         self,
@@ -151,10 +186,41 @@ class FillTool:
         context: ToolContext,
     ) -> ToolExecutionOutcome:
         browser = _require_browser(context)
-        result = await browser.fill_by_semantic_id(
-            str(arguments["element_id"]),
-            str(arguments["value"]),
-        )
+        element_id = str(arguments["element_id"])
+        value = str(arguments["value"])
+        if context.observation_engine is None:
+            result = await browser.fill_by_semantic_id(element_id, value)
+            return _outcome_from_browser_action(result)
+
+        observation_engine = context.observation_engine
+        resolver = SemanticNavigationResolver()
+        before = await observation_engine.observe()
+        result = await browser.fill_by_semantic_id(element_id, value)
+        recovered = False
+        resolution: SemanticResolution | None = None
+        source_observation = before
+        source_id = element_id
+        for _ in range(max(0, self.stale_recovery_attempts)):
+            if not _is_stale_element_error(result.error_code):
+                break
+            refreshed = await observation_engine.observe()
+            remapped = resolver.remap_field_candidate(source_observation, refreshed, source_id)
+            if not remapped.is_resolved:
+                return _resolution_failure(remapped)
+            resolution = remapped
+            recovered = True
+            source_observation = refreshed
+            source_id = remapped.selected.element_id
+            result = await browser.fill_by_semantic_id(source_id, value)
+
+        if recovered and resolution is not None:
+            after = await observation_engine.observe()
+            return _outcome_from_semantic_action(
+                result,
+                resolution=resolution,
+                transition=resolver.detect_transition(before, after),
+                recovered_from_stale=True,
+            )
         return _outcome_from_browser_action(result)
 
 
@@ -280,6 +346,7 @@ class ClickByIntentTool:
         )
     )
     timeout_seconds: float = 20.0
+    stale_recovery_attempts: int = 1
 
     async def execute(
         self,
@@ -301,18 +368,20 @@ class ClickByIntentTool:
 
         result = await browser.click_by_semantic_id(resolution.selected.element_id)
         recovered = False
-        if result.error_code == "semantic_element_not_found":
+        source_observation = before
+        source_id = resolution.selected.element_id
+        for _ in range(max(0, self.stale_recovery_attempts)):
+            if not _is_stale_element_error(result.error_code):
+                break
             refreshed = await observation_engine.observe()
-            remapped = resolver.resolve_click(
-                refreshed,
-                target=str(arguments["target"]),
-                role=_optional_argument(arguments, "role"),
-                context=_optional_argument(arguments, "context"),
-            )
-            if remapped.is_resolved:
-                resolution = remapped
-                recovered = True
-                result = await browser.click_by_semantic_id(resolution.selected.element_id)
+            remapped = resolver.remap_click_candidate(source_observation, refreshed, source_id)
+            if not remapped.is_resolved:
+                return _resolution_failure(remapped)
+            resolution = remapped
+            recovered = True
+            source_observation = refreshed
+            source_id = resolution.selected.element_id
+            result = await browser.click_by_semantic_id(source_id)
 
         after = await observation_engine.observe()
         return _outcome_from_semantic_action(
@@ -370,6 +439,7 @@ class FillByLabelTool:
         )
     )
     timeout_seconds: float = 20.0
+    stale_recovery_attempts: int = 1
 
     async def execute(
         self,
@@ -393,20 +463,20 @@ class FillByLabelTool:
             str(arguments["value"]),
         )
         recovered = False
-        if result.error_code == "semantic_element_not_found":
+        source_observation = before
+        source_id = resolution.selected.element_id
+        for _ in range(max(0, self.stale_recovery_attempts)):
+            if not _is_stale_element_error(result.error_code):
+                break
             refreshed = await observation_engine.observe()
-            remapped = resolver.resolve_form_field(
-                refreshed,
-                str(arguments["label"]),
-                _optional_argument(arguments, "context"),
-            )
-            if remapped.is_resolved:
-                resolution = remapped
-                recovered = True
-                result = await browser.fill_by_semantic_id(
-                    resolution.selected.element_id,
-                    str(arguments["value"]),
-                )
+            remapped = resolver.remap_field_candidate(source_observation, refreshed, source_id)
+            if not remapped.is_resolved:
+                return _resolution_failure(remapped)
+            resolution = remapped
+            recovered = True
+            source_observation = refreshed
+            source_id = resolution.selected.element_id
+            result = await browser.fill_by_semantic_id(source_id, str(arguments["value"]))
 
         after = await observation_engine.observe()
         return _outcome_from_semantic_action(
@@ -683,6 +753,10 @@ def _resolution_failure(resolution: SemanticResolution) -> ToolExecutionOutcome:
         retryable=resolution.status is SemanticResolutionStatus.NOT_FOUND,
         error_code=error_code,
     )
+
+
+def _is_stale_element_error(error_code: str | None) -> bool:
+    return error_code in {"semantic_element_not_found", "semantic_element_stale"}
 
 
 def _outcome_from_screenshot(result: ScreenshotResult) -> ToolExecutionOutcome:
