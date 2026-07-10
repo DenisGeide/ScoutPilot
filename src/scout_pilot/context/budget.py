@@ -109,6 +109,26 @@ class ContextCompressionMetrics:
     observation_after_tokens: int = 0
     memory_before_tokens: int = 0
     memory_after_tokens: int = 0
+    observation_sections_before: int = 0
+    observation_sections_after: int = 0
+    observation_sections_kept: int = 0
+    observation_sections_dropped: int = 0
+    interactive_elements_before: int = 0
+    interactive_elements_after: int = 0
+    interactive_elements_kept: int = 0
+    interactive_elements_dropped: int = 0
+    form_fields_before: int = 0
+    form_fields_after: int = 0
+    form_fields_kept: int = 0
+    form_fields_dropped: int = 0
+    dialogs_before: int = 0
+    dialogs_after: int = 0
+    dialogs_kept: int = 0
+    dialogs_dropped: int = 0
+    memory_summaries_before: int = 0
+    memory_summaries_after: int = 0
+    memory_summaries_kept: int = 0
+    memory_summaries_dropped: int = 0
     dropped_sections: int = 0
     dropped_interactive_elements: int = 0
     dropped_form_fields: int = 0
@@ -125,6 +145,26 @@ class ContextCompressionMetrics:
             "observation_after_tokens": self.observation_after_tokens,
             "memory_before_tokens": self.memory_before_tokens,
             "memory_after_tokens": self.memory_after_tokens,
+            "observation_sections_before": self.observation_sections_before,
+            "observation_sections_after": self.observation_sections_after,
+            "observation_sections_kept": self.observation_sections_kept,
+            "observation_sections_dropped": self.observation_sections_dropped,
+            "interactive_elements_before": self.interactive_elements_before,
+            "interactive_elements_after": self.interactive_elements_after,
+            "interactive_elements_kept": self.interactive_elements_kept,
+            "interactive_elements_dropped": self.interactive_elements_dropped,
+            "form_fields_before": self.form_fields_before,
+            "form_fields_after": self.form_fields_after,
+            "form_fields_kept": self.form_fields_kept,
+            "form_fields_dropped": self.form_fields_dropped,
+            "dialogs_before": self.dialogs_before,
+            "dialogs_after": self.dialogs_after,
+            "dialogs_kept": self.dialogs_kept,
+            "dialogs_dropped": self.dialogs_dropped,
+            "memory_summaries_before": self.memory_summaries_before,
+            "memory_summaries_after": self.memory_summaries_after,
+            "memory_summaries_kept": self.memory_summaries_kept,
+            "memory_summaries_dropped": self.memory_summaries_dropped,
             "dropped_sections": self.dropped_sections,
             "dropped_interactive_elements": self.dropped_interactive_elements,
             "dropped_form_fields": self.dropped_form_fields,
@@ -156,6 +196,8 @@ class _MemoryFit:
     summaries: tuple[str, ...]
     before_tokens: int
     after_tokens: int
+    before_count: int
+    after_count: int
     dropped: int
     deduplicated: int
     preserved_critical: int
@@ -313,6 +355,26 @@ class DeterministicContextBudgeter:
             observation_after_tokens=observation_fit.metrics.observation_after_tokens,
             memory_before_tokens=memory_fit.before_tokens,
             memory_after_tokens=memory_fit.after_tokens,
+            observation_sections_before=observation_fit.metrics.observation_sections_before,
+            observation_sections_after=observation_fit.metrics.observation_sections_after,
+            observation_sections_kept=observation_fit.metrics.observation_sections_kept,
+            observation_sections_dropped=observation_fit.metrics.observation_sections_dropped,
+            interactive_elements_before=observation_fit.metrics.interactive_elements_before,
+            interactive_elements_after=observation_fit.metrics.interactive_elements_after,
+            interactive_elements_kept=observation_fit.metrics.interactive_elements_kept,
+            interactive_elements_dropped=observation_fit.metrics.interactive_elements_dropped,
+            form_fields_before=observation_fit.metrics.form_fields_before,
+            form_fields_after=observation_fit.metrics.form_fields_after,
+            form_fields_kept=observation_fit.metrics.form_fields_kept,
+            form_fields_dropped=observation_fit.metrics.form_fields_dropped,
+            dialogs_before=observation_fit.metrics.dialogs_before,
+            dialogs_after=observation_fit.metrics.dialogs_after,
+            dialogs_kept=observation_fit.metrics.dialogs_kept,
+            dialogs_dropped=observation_fit.metrics.dialogs_dropped,
+            memory_summaries_before=len(memory_summaries),
+            memory_summaries_after=memory_fit.after_count,
+            memory_summaries_kept=memory_fit.after_count,
+            memory_summaries_dropped=max(len(memory_summaries) - memory_fit.after_count, 0),
             dropped_sections=observation_fit.metrics.dropped_sections,
             dropped_interactive_elements=observation_fit.metrics.dropped_interactive_elements,
             dropped_form_fields=observation_fit.metrics.dropped_form_fields,
@@ -355,8 +417,12 @@ class DeterministicContextBudgeter:
             fitted.interactive_elements
         )
         dropped_fields = len(observation.form_fields) - len(fitted.form_fields)
+        dropped_dialogs = len(observation.dialogs) - len(fitted.dialogs)
 
-        while self.estimate_observation_tokens(fitted) > max_tokens and fitted.sections:
+        while (
+            self.estimate_observation_tokens(fitted) > max_tokens
+            and len(fitted.sections) > 1
+        ):
             fitted = replace(fitted, sections=fitted.sections[:-1])
             dropped_sections += 1
 
@@ -403,6 +469,7 @@ class DeterministicContextBudgeter:
                 after_tokens = self.estimate_observation_tokens(fitted)
             while after_tokens > max_tokens and fitted.dialogs:
                 fitted = replace(fitted, dialogs=fitted.dialogs[:-1])
+                dropped_dialogs += 1
                 after_tokens = self.estimate_observation_tokens(fitted)
             while after_tokens > max_tokens and len(fitted.summary) > 80:
                 shortened = fitted.summary[: max(80, len(fitted.summary) // 2)].rstrip()
@@ -413,15 +480,57 @@ class DeterministicContextBudgeter:
                     summary=shortened,
                 )
                 after_tokens = self.estimate_observation_tokens(fitted)
+            while after_tokens > max_tokens and fitted.sections:
+                first_section = fitted.sections[0]
+                if len(first_section.text) <= 80:
+                    break
+                shortened = first_section.text[
+                    : max(80, len(first_section.text) // 2)
+                ].rstrip()
+                if len(shortened) >= len(first_section.text):
+                    break
+                fitted = replace(
+                    fitted,
+                    sections=(replace(first_section, text=shortened), *fitted.sections[1:]),
+                )
+                after_tokens = self.estimate_observation_tokens(fitted)
 
+        sections_after = len(fitted.sections)
+        interactive_after = len(fitted.interactive_elements)
+        fields_after = len(fitted.form_fields)
+        dialogs_after = len(fitted.dialogs)
+        dropped_sections = max(len(observation.sections) - sections_after, dropped_sections, 0)
+        dropped_interactive = max(
+            len(observation.interactive_elements) - interactive_after,
+            dropped_interactive,
+            0,
+        )
+        dropped_fields = max(len(observation.form_fields) - fields_after, dropped_fields, 0)
+        dropped_dialogs = max(len(observation.dialogs) - dialogs_after, dropped_dialogs, 0)
         metrics = ContextCompressionMetrics(
             before_tokens=before_tokens,
             after_tokens=after_tokens,
             observation_before_tokens=before_tokens,
             observation_after_tokens=after_tokens,
-            dropped_sections=max(dropped_sections, 0),
-            dropped_interactive_elements=max(dropped_interactive, 0),
-            dropped_form_fields=max(dropped_fields, 0),
+            observation_sections_before=len(observation.sections),
+            observation_sections_after=sections_after,
+            observation_sections_kept=sections_after,
+            observation_sections_dropped=dropped_sections,
+            interactive_elements_before=len(observation.interactive_elements),
+            interactive_elements_after=interactive_after,
+            interactive_elements_kept=interactive_after,
+            interactive_elements_dropped=dropped_interactive,
+            form_fields_before=len(observation.form_fields),
+            form_fields_after=fields_after,
+            form_fields_kept=fields_after,
+            form_fields_dropped=dropped_fields,
+            dialogs_before=len(observation.dialogs),
+            dialogs_after=dialogs_after,
+            dialogs_kept=dialogs_after,
+            dialogs_dropped=dropped_dialogs,
+            dropped_sections=dropped_sections,
+            dropped_interactive_elements=dropped_interactive,
+            dropped_form_fields=dropped_fields,
             deduplicated_items=deduped_count,
             emergency_compression_applied=emergency,
         )
@@ -472,6 +581,8 @@ class DeterministicContextBudgeter:
             summaries=tuple(selected),
             before_tokens=before_tokens,
             after_tokens=after_tokens,
+            before_count=len(summaries),
+            after_count=len(selected),
             dropped=max(len(summaries) - len(selected) - deduped, 0),
             deduplicated=deduped,
             preserved_critical=preserved_critical,
@@ -579,10 +690,16 @@ def _emergency_observation(
     observation: PageObservation,
     settings: ContextBudgetSettings,
 ) -> PageObservation:
+    emergency_section_chars = min(settings.max_section_chars, 160)
+    sections = tuple(
+        replace(section, text=_safe_text(section.text, emergency_section_chars))
+        for section in observation.sections[:1]
+        if _safe_text(section.text, emergency_section_chars)
+    )
     return replace(
         observation,
         summary=_safe_text(observation.summary, min(settings.max_summary_chars, 320)),
-        sections=(),
+        sections=sections,
         interactive_elements=observation.interactive_elements[:5],
         form_fields=observation.form_fields[:3],
         dialogs=observation.dialogs[:2],

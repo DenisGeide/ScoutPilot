@@ -256,6 +256,8 @@ def test_planner_request_uses_budgeted_context_for_oversized_inputs():
     assert plan.memory_summaries == tuple(payload["memory_summaries"])
     assert metrics["after_tokens"] < metrics["before_tokens"]
     assert metrics["dropped_sections"] > 0
+    assert metrics["observation_sections_kept"] > 0
+    assert metrics["memory_summaries_kept"] == len(payload["memory_summaries"])
     assert "task.constraint" in " ".join(payload["memory_summaries"])
     assert "<html" not in provider.requests[0].messages[1].content.casefold()
 

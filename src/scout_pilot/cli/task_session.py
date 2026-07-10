@@ -601,14 +601,49 @@ def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
     if verbose and event.name == "context_budget_applied":
         metrics = event.details.get("metrics")
         if isinstance(metrics, dict):
-            before = metrics.get("before_tokens")
-            after = metrics.get("after_tokens")
-            return f"Контекст проверен и сжат при необходимости: {before} -> {after} токенов."
+            return _context_budget_message(metrics)
     if verbose and event.name in {"observation_captured", "post_action_observation_captured"}:
         title = event.details.get("title") or "без заголовка"
         url = event.details.get("url") or "URL не определен"
         return f"Наблюдение страницы: {title}; {url}"
     return ""
+
+
+def _context_budget_message(metrics: Mapping[str, object]) -> str:
+    before = _metric_int(metrics, "before_tokens")
+    after = _metric_int(metrics, "after_tokens")
+    preserved: list[str] = []
+    if _metric_int(metrics, "dialogs_kept") > 0:
+        preserved.append("диалоги")
+    if _metric_int(metrics, "form_fields_kept") > 0:
+        preserved.append("формы")
+    if _metric_int(metrics, "preserved_critical_facts") > 0:
+        preserved.append("важные факты")
+    if not preserved and _metric_int(metrics, "observation_sections_kept") > 0:
+        preserved.append("важные секции")
+    if not preserved and _metric_int(metrics, "memory_summaries_kept") > 0:
+        preserved.append("память задачи")
+    if not preserved:
+        preserved.append("безопасный минимум")
+    suffix = ""
+    if metrics.get("emergency_compression_applied") is True:
+        suffix = " Использовано аварийное сжатие."
+    return (
+        f"Контекст сжат: {before} -> {after} токенов, "
+        f"сохранены: {'/'.join(preserved)}.{suffix}"
+    )
+
+
+def _metric_int(metrics: Mapping[str, object], key: str) -> int:
+    value = metrics.get(key, 0)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float):
+        return int(value)
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _tool_result_message(event: RuntimeEvent) -> str:

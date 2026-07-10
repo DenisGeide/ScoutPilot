@@ -385,6 +385,29 @@ def test_dashboard_renders_required_status_fields():
     assert "Следующее действие: не выполнять действие в сухом запуске" in output
 
 
+def test_verbose_context_budget_message_shows_compression_evidence():
+    message = task_session._event_detail_message(
+        RuntimeEvent(
+            name="context_budget_applied",
+            status=RuntimeStatus.RUNNING,
+            details={
+                "metrics": {
+                    "before_tokens": 1200,
+                    "after_tokens": 640,
+                    "dialogs_kept": 1,
+                    "form_fields_kept": 2,
+                    "preserved_critical_facts": 3,
+                    "emergency_compression_applied": False,
+                }
+            },
+        ),
+        verbose=True,
+    )
+
+    assert "Контекст сжат: 1200 -> 640 токенов" in message
+    assert "диалоги/формы/важные факты" in message
+
+
 class _ApplyConfirmationProvider:
     def __init__(self) -> None:
         self.tool_requests = 0

@@ -58,3 +58,44 @@ def test_sanitize_for_report_preserves_safe_structure():
         "title": "Safe page",
         "nested": [{"token": "[REDACTED]"}, {"count": 2}],
     }
+
+
+def test_runtime_report_preserves_safe_context_budget_metrics(tmp_path):
+    recorder = RuntimeReportRecorder(
+        task="Проверить страницу",
+        mode="test",
+        dry_run=False,
+    )
+    asyncio.run(
+        recorder.record(
+            RuntimeEvent(
+                name="context_budget_applied",
+                status=RuntimeStatus.RUNNING,
+                details={
+                    "metrics": {
+                        "before_tokens": 1800,
+                        "after_tokens": 720,
+                        "observation_sections_kept": 4,
+                        "observation_sections_dropped": 9,
+                        "memory_summaries_kept": 5,
+                        "memory_summaries_dropped": 18,
+                        "emergency_compression_applied": True,
+                        "unsafe_note": "<html><body>raw page</body></html>",
+                    }
+                },
+            )
+        )
+    )
+    recorder.finalize(success=True, summary_ru="Готово")
+    recorder.write(report_path=tmp_path / "report.json", replay_path=tmp_path / "replay.json")
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+    metrics = report["events"][0]["details"]["metrics"]
+
+    assert metrics["before_tokens"] == 1800
+    assert metrics["after_tokens"] == 720
+    assert metrics["observation_sections_kept"] == 4
+    assert metrics["memory_summaries_dropped"] == 18
+    assert "<html" not in serialized
+    assert "raw page" not in serialized

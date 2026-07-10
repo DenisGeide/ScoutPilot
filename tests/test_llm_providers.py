@@ -327,6 +327,8 @@ def test_reasoning_engine_budgeting_compresses_oversized_context():
     assert result.status is ReasoningStatus.ANSWER
     assert metrics["after_tokens"] < metrics["before_tokens"]
     assert metrics["dropped_sections"] > 0
+    assert metrics["observation_sections_kept"] > 0
+    assert metrics["memory_summaries_kept"] == len(payload["memory_summaries"])
     assert "task.constraint" in " ".join(payload["memory_summaries"])
     assert "<html" not in provider.requests[0].messages[1].content.casefold()
 

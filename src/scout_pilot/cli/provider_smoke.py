@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from scout_pilot.context import DeterministicContextBudgeter
 from scout_pilot.config import AppConfig
 from scout_pilot.llm import (
     LlmErrorCode,
@@ -115,6 +117,18 @@ def _api_key_for_provider(config: AppConfig, provider: LlmProviderName) -> str |
 
 
 def _smoke_request(config: LlmProviderConfig) -> LlmProviderRequest:
+    budgeted = DeterministicContextBudgeter().assemble(
+        user_task="provider smoke connectivity check",
+        observation=None,
+        memory_summaries=(),
+        max_input_tokens=512,
+        reserved_output_tokens=config.max_output_tokens,
+    )
+    payload = {
+        "task": "Ответь одной короткой фразой: провайдер доступен, тестовый запрос получен.",
+        "context_metrics": dict(budgeted.metrics.to_dict()),
+        "budget": dict(budgeted.budget),
+    }
     return LlmProviderRequest(
         messages=(
             LlmMessage(
@@ -123,14 +137,13 @@ def _smoke_request(config: LlmProviderConfig) -> LlmProviderRequest:
                     "You are a tiny Scout Pilot provider connectivity smoke test. "
                     "Use only this synthetic connectivity prompt. Do not ask for external "
                     "context, tools, files, sessions, secrets, page data, or account data. "
+                    "The user payload includes safe context budget metrics for traceability. "
                     "Reply with one short Russian sentence that confirms the provider works."
                 ),
             ),
             LlmMessage(
                 role=LlmMessageRole.USER,
-                content=(
-                    "Ответь одной короткой фразой: провайдер доступен, тестовый запрос получен."
-                ),
+                content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
             ),
         ),
         tools=(),

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from scout_pilot.cli.provider_smoke import ProviderSmokeSettings, run_provider_smoke
 from scout_pilot.llm import (
@@ -46,6 +47,7 @@ def test_provider_smoke_sends_tiny_provider_neutral_request(tmp_path, monkeypatc
 
     request = fake_provider.requests[0]
     serialized_messages = "\n".join(message.content for message in request.messages).casefold()
+    payload = json.loads(request.messages[1].content)
 
     assert result.success is True
     assert result.exit_code == 0
@@ -53,6 +55,8 @@ def test_provider_smoke_sends_tiny_provider_neutral_request(tmp_path, monkeypatc
     assert "Провайдер доступен" in result.message_ru
     assert isinstance(request, LlmProviderRequest)
     assert request.tools == ()
+    assert payload["context_metrics"]["after_tokens"] <= payload["context_metrics"]["before_tokens"]
+    assert payload["context_metrics"]["observation_sections_kept"] == 0
     assert "browser state" not in serialized_messages
     assert "page html" not in serialized_messages
     assert "private file" not in serialized_messages

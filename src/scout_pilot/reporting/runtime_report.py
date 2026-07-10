@@ -152,7 +152,7 @@ def _sanitize_value(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if _is_sensitive_key(key_text):
+            if _is_sensitive_key(key_text) and not _is_safe_numeric_metric(key_text, item):
                 result[key_text] = "[REDACTED]"
             else:
                 result[key_text] = _sanitize_value(item)
@@ -184,6 +184,17 @@ def _sanitize_text(text: str) -> str:
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.casefold().replace("-", "_")
     return any(hint in normalized for hint in _SENSITIVE_KEY_HINTS)
+
+
+def _is_safe_numeric_metric(key: str, value: Any) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    return (
+        normalized.endswith("_tokens")
+        or normalized.endswith("_token_count")
+        or normalized in {"before_tokens", "after_tokens", "total_tokens"}
+    )
 
 
 def _truncate(text: str, limit: int) -> str:

@@ -35,9 +35,10 @@ Scout Pilot устроен как набор независимых слоев. 
 - Tool Runtime блокирует `file://` navigation через Security Policy, чтобы LLM-предложение не могло открыть локальный приватный файл и передать его содержимое в observation/model context. Низкоуровневые Browser Engine tests могут открывать local pages напрямую без Tool Runtime.
 - Провайдеры LLM и SDK imports не должны выходить за пределы `scout_pilot.llm`.
 - Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
-- Все model-facing запросы в Reasoning Engine и Planning Engine проходят через `DeterministicContextBudgeter`; raw HTML, DOM dumps, cookies, tokens, browser profiles и private files не попадают в payload.
+- Все model-facing запросы в Reasoning Engine и Planning Engine проходят через `DeterministicContextBudgeter`; ручной `provider-smoke` отправляет только synthetic payload с безопасными context metrics. Raw HTML, DOM dumps, cookies, tokens, browser profiles и private files не попадают в payload.
 - Context Budgeting сначала удаляет repeated navigation/header/footer content и stale observations, затем сжимает oversized sections, а при нехватке бюджета включает emergency compression.
 - Context Budgeting обязан сохранять user instructions, confirmation decisions, security warnings, task constraints и recent failures, даже когда low-value memory summaries отбрасываются.
+- Runtime событие `context_budget_applied` фиксирует estimated tokens before/after, kept/dropped observation sections, forms/dialogs, kept/dropped memory summaries, deduplication count, preserved critical facts и emergency flag. В verbose CLI это видно короткой строкой вида `Контекст сжат: X -> Y токенов, сохранены: диалоги/формы/важные факты.`, а report/replay получают только безопасные числовые метрики.
 - Planning Engine получает только compact observation и нейтральные tool schemas; план не должен содержать CSS selectors, XPath, Playwright locators или hardcoded route paths.
 - Planning Engine может помечать шаги как uncertain или requires_confirmation, но не выполняет browser actions.
 - Hierarchical Memory не является глобальным blob: working memory ограничена текущим циклом, task memory хранит важные факты задачи, episodic memory хранит компактную историю событий.

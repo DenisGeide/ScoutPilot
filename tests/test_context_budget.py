@@ -1,6 +1,7 @@
 from scout_pilot.context import ContextBudgetSettings, DeterministicContextBudgeter
 from scout_pilot.models import (
     ContextBudget,
+    DialogSummary,
     FormFieldSummary,
     InteractiveElement,
     PageIssueCode,
@@ -115,6 +116,87 @@ def test_emergency_compression_reports_before_after_metrics():
     assert budgeted.budget["remaining_tokens"] >= 0
 
 
+def test_oversized_local_page_records_kept_and_dropped_context_evidence():
+    observation = _large_observation_with_dialog_and_forms()
+    memory = [
+        "task.user_goal: compare three AI Engineer vacancies.",
+        "task.constraint: stop before applying.",
+        "security warning: applying requires explicit confirmation.",
+    ]
+    budgeter = DeterministicContextBudgeter(
+        ContextBudgetSettings(
+            max_input_tokens=900,
+            reserved_output_tokens=200,
+            max_observation_tokens=420,
+            max_memory_tokens=160,
+            max_section_chars=140,
+            max_summary_chars=160,
+        )
+    )
+
+    budgeted = budgeter.assemble(
+        user_task="Find three suitable AI Engineer vacancies and stop before applying.",
+        observation=observation,
+        memory_summaries=memory,
+        max_input_tokens=900,
+        reserved_output_tokens=200,
+    )
+    metrics = budgeted.metrics.to_dict()
+
+    assert metrics["before_tokens"] > metrics["after_tokens"]
+    assert metrics["observation_sections_before"] == len(observation.sections)
+    assert metrics["observation_sections_kept"] == len(budgeted.observation.sections)
+    assert 0 < metrics["observation_sections_kept"] < metrics["observation_sections_before"]
+    assert metrics["observation_sections_dropped"] > 0
+    assert metrics["dialogs_kept"] >= 1
+    assert metrics["form_fields_kept"] >= 1
+    assert metrics["memory_summaries_kept"] == len(budgeted.memory_summaries)
+    assert "<html" not in str(budgeted.observation.to_llm_context()).casefold()
+
+
+def test_long_task_history_metrics_show_memory_kept_and_dropped():
+    summaries = [
+        *(f"working.observation: stale repeated page chrome {index}" for index in range(30)),
+        "task.user_goal: find relevant Python AI Developer roles.",
+        "task.constraint: only prepare notes, do not send applications.",
+        "task.confirmed_choice: user wants remote-friendly vacancies.",
+        "security warning: external side effects require confirmation.",
+        "failure: previous result click opened an irrelevant page.",
+    ]
+    budgeter = DeterministicContextBudgeter(
+        ContextBudgetSettings(
+            max_input_tokens=760,
+            reserved_output_tokens=220,
+            max_observation_tokens=180,
+            max_memory_tokens=90,
+            max_memory_summaries=5,
+        )
+    )
+
+    budgeted = budgeter.assemble(
+        user_task="Prepare vacancy notes.",
+        observation=PageObservation(
+            url="https://example.test",
+            title="Compact",
+            summary="Short page summary.",
+        ),
+        memory_summaries=summaries,
+        max_input_tokens=760,
+        reserved_output_tokens=220,
+    )
+    metrics = budgeted.metrics.to_dict()
+    joined = " ".join(budgeted.memory_summaries).casefold()
+
+    assert metrics["memory_summaries_before"] == len(summaries)
+    assert metrics["memory_summaries_kept"] == len(budgeted.memory_summaries)
+    assert metrics["memory_summaries_dropped"] > 0
+    assert metrics["preserved_critical_facts"] >= 3
+    assert "user_goal" in joined
+    assert "constraint" in joined
+    assert "security warning" in joined
+    assert "stale repeated page chrome 0" not in joined
+
+
 def test_raw_markup_like_sections_are_not_preserved():
     observation = PageObservation(
         url="https://example.test",
@@ -187,5 +269,25 @@ def _large_observation() -> PageObservation:
                 value_state="filled",
             )
             for index in range(10)
+        ],
+    )
+
+
+def _large_observation_with_dialog_and_forms() -> PageObservation:
+    base = _large_observation()
+    return PageObservation(
+        url=base.url,
+        title=base.title,
+        summary=base.summary,
+        sections=base.sections,
+        interactive_elements=base.interactive_elements,
+        form_fields=base.form_fields,
+        dialogs=[
+            DialogSummary(
+                "dialog_1",
+                "dialog",
+                "Confirmation",
+                "Visible dialog asks whether the user wants to apply now.",
+            )
         ],
     )
