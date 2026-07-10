@@ -588,7 +588,7 @@ def _is_blocked_navigation(request: ToolRequest) -> bool:
     if request.name != "browser.navigate":
         return False
     url = str(request.arguments.get("url", "")).strip().casefold()
-    return url.startswith("javascript:")
+    return url.startswith(("javascript:", "file:"))
 
 
 def _decision_reason(

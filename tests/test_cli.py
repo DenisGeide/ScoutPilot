@@ -24,14 +24,14 @@ def test_demo_vacancy_search_command_requires_start_url():
         [
             "demo-vacancy-search",
             "--start-url",
-            "file:///tmp/example.html",
+            "https://example.test",
             "--headless",
             "--confirm-search-fill",
         ]
     )
 
     assert args.command == "demo-vacancy-search"
-    assert args.start_url == "file:///tmp/example.html"
+    assert args.start_url == "https://example.test"
     assert args.headless is True
     assert args.confirm_search_fill is True
 

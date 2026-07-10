@@ -3,6 +3,7 @@ from pathlib import Path
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
 from scout_pilot.browser.types import BrowserActionResult
+from scout_pilot.demo import LocalDemoServer
 from scout_pilot.models import (
     ElementState,
     FormFieldSummary,
@@ -190,44 +191,45 @@ def _run_semantic_search_flow(profile_dir: Path, page_path: Path) -> str | None:
                 ToolContext(browser=browser, observation_engine=observer),
             )
 
-            navigation = await runtime.execute(
-                ToolRequest("browser.navigate", {"url": page_path.resolve().as_uri()})
-            )
-            assert navigation.success is True
-
-            fill_request = ToolRequest(
-                "browser.fill_by_label",
-                {"label": "search", "value": "alpha"},
-            )
-            paused = await runtime.execute(fill_request)
-            assert paused.status is ToolExecutionStatus.PAUSED
-            confirmation = paused.data["confirmation"]
-            assert runtime.confirm_pending_action(str(confirmation["confirmation_id"])) is True
-
-            filled = await runtime.execute(fill_request)
-            assert filled.success is True
-            assert runtime.history[-1].arguments == {
-                "label": "search",
-                "value": "[REDACTED]",
-                "context": None,
-            }
-
-            searched = await runtime.execute(
-                ToolRequest(
-                    "browser.click_by_intent",
-                    {"target": "search", "role": "button"},
+            with LocalDemoServer(page_path.parent) as server:
+                navigation = await runtime.execute(
+                    ToolRequest("browser.navigate", {"url": server.url_for(page_path.name)})
                 )
-            )
-            assert searched.success is True
-            assert searched.data["transition"]["changed"] is True
+                assert navigation.success is True
 
-            opened = await runtime.execute(
-                ToolRequest("browser.click_by_intent", {"target": "alpha"})
-            )
-            assert opened.success is True
+                fill_request = ToolRequest(
+                    "browser.fill_by_label",
+                    {"label": "search", "value": "alpha"},
+                )
+                paused = await runtime.execute(fill_request)
+                assert paused.status is ToolExecutionStatus.PAUSED
+                confirmation = paused.data["confirmation"]
+                assert runtime.confirm_pending_action(str(confirmation["confirmation_id"])) is True
 
-            state = await browser.current_state()
-            return state.title
+                filled = await runtime.execute(fill_request)
+                assert filled.success is True
+                assert runtime.history[-1].arguments == {
+                    "label": "search",
+                    "value": "[REDACTED]",
+                    "context": None,
+                }
+
+                searched = await runtime.execute(
+                    ToolRequest(
+                        "browser.click_by_intent",
+                        {"target": "search", "role": "button"},
+                    )
+                )
+                assert searched.success is True
+                assert searched.data["transition"]["changed"] is True
+
+                opened = await runtime.execute(
+                    ToolRequest("browser.click_by_intent", {"target": "alpha"})
+                )
+                assert opened.success is True
+
+                state = await browser.current_state()
+                return state.title
         finally:
             await browser.stop()
 
@@ -250,7 +252,7 @@ def _write_site_a(tmp_path) -> Path:
           <input id="q" type="search" placeholder="Search catalog">
           <button type="button" onclick="document.title='Results A'; document.getElementById('results').hidden=false">Search</button>
           <section id="results" hidden>
-            <a href="{detail.resolve().as_uri()}">Alpha record</a>
+            <a href="alpha-a.html">Alpha record</a>
           </section>
         </main>
         """,
@@ -260,7 +262,6 @@ def _write_site_a(tmp_path) -> Path:
 
 
 def _write_site_b(tmp_path) -> Path:
-    detail_uri = (tmp_path / "alpha-b.html").resolve().as_uri()
     detail = tmp_path / "alpha-b.html"
     detail.write_text(
         "<!doctype html><title>Alpha B</title><main><h1>Alpha record</h1></main>",
@@ -278,7 +279,7 @@ def _write_site_b(tmp_path) -> Path:
           </div>
           <article id="cards" hidden>
             <p>Alpha record is available.</p>
-            <button type="button" aria-label="Open Alpha" onclick="window.location.href='{detail_uri}'">View</button>
+            <button type="button" aria-label="Open Alpha" onclick="window.location.href='alpha-b.html'">View</button>
           </article>
         </main>
         """,

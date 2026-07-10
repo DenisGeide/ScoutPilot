@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
-from scout_pilot.demo import VacancySearchDemoRunner, VacancySearchDemoSettings
+from scout_pilot.demo import LocalDemoServer, VacancySearchDemoRunner, VacancySearchDemoSettings
 from scout_pilot.observation import ObservationSettings, SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
 
@@ -98,17 +98,19 @@ def _run_demo(
     )
 
     async def scenario():
-        return await runner.run(
-            VacancySearchDemoSettings(
-                start_url=start_page.resolve().as_uri(),
-                query="AI Engineer Python AI Developer",
-                max_vacancies=3,
-                report_path=report_path,
-                confirm_search_fill=confirm_search_fill,
-                probe_security=probe_security,
-                wait_after_search_ms=50,
+        with LocalDemoServer(start_page.parent) as server:
+            return await runner.run(
+                VacancySearchDemoSettings(
+                    start_url=server.url_for(start_page.name),
+                    query="AI Engineer Python AI Developer",
+                    max_vacancies=3,
+                    report_path=report_path,
+                    replay_path=report_path.with_name(f"{report_path.stem}-replay.json"),
+                    confirm_search_fill=confirm_search_fill,
+                    probe_security=probe_security,
+                    wait_after_search_ms=50,
+                )
             )
-        )
 
     return asyncio.run(scenario())
 
@@ -147,9 +149,9 @@ def _write_site_a(root: Path) -> Path:
           <button type="button" onclick="document.title='Search results A'; document.getElementById('results').hidden=false">Search</button>
           <section id="results" hidden>
             <h2>Results</h2>
-            <a href="{(root / 'ai-engineer.html').resolve().as_uri()}">AI Engineer - Applied ML</a>
-            <a href="{(root / 'python-ai-developer.html').resolve().as_uri()}">Python AI Developer</a>
-            <a href="{(root / 'llm-engineer.html').resolve().as_uri()}">LLM Engineer</a>
+            <a href="ai-engineer.html">AI Engineer - Applied ML</a>
+            <a href="python-ai-developer.html">Python AI Developer</a>
+            <a href="llm-engineer.html">LLM Engineer</a>
           </section>
         </main>
         """,
@@ -194,15 +196,15 @@ def _write_site_b(root: Path) -> Path:
           <section id="cards" hidden>
             <article>
               <h2>AI Engineer B</h2>
-              <a href="{(root / 'role-one.html').resolve().as_uri()}"><strong>AI Engineer B</strong><span>Open role</span></a>
+              <a href="role-one.html"><strong>AI Engineer B</strong><span>Open role</span></a>
             </article>
             <article>
               <h2>Python AI Developer B</h2>
-              <a href="{(root / 'role-two.html').resolve().as_uri()}"><strong>Python AI Developer B</strong><span>Open role</span></a>
+              <a href="role-two.html"><strong>Python AI Developer B</strong><span>Open role</span></a>
             </article>
             <article>
               <h2>Applied LLM Engineer B</h2>
-              <a href="{(root / 'role-three.html').resolve().as_uri()}"><strong>Applied LLM Engineer B</strong><span>Open role</span></a>
+              <a href="role-three.html"><strong>Applied LLM Engineer B</strong><span>Open role</span></a>
             </article>
           </section>
         </main>

@@ -31,6 +31,7 @@ Scout Pilot строится как набор независимых слоев
 - Tool Runtime запускает deterministic Security Policy перед `tool.execute()` и не содержит provider-specific schema adapters.
 - LLM не может пометить действие как безопасное: `ToolRequest.risk` и аргументы модели не используются как источник доверия для security decision.
 - Sensitive, destructive и external-side-effect actions возвращают paused result с confirmation request; выполнение продолжается только после явного подтверждения exact request.
+- Tool Runtime блокирует `file://` navigation через Security Policy, чтобы LLM-предложение не могло открыть локальный приватный файл и передать его содержимое в observation/model context. Низкоуровневые Browser Engine tests могут открывать local pages напрямую без Tool Runtime.
 - Провайдеры LLM и SDK imports не должны выходить за пределы `scout_pilot.llm`.
 - Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
 - Все model-facing запросы в Reasoning Engine и Planning Engine проходят через `DeterministicContextBudgeter`; raw HTML, DOM dumps, cookies, tokens, browser profiles и private files не попадают в payload.

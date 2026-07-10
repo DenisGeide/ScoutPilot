@@ -23,6 +23,22 @@ def test_policy_allows_safe_navigation_and_records_audit():
     assert policy.audit_trail[-1].outcome == "allowed"
 
 
+def test_policy_blocks_local_file_navigation():
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.navigate",
+            arguments={"url": "file:///C:/Users/Unknown/.env"},
+        )
+    )
+
+    assert decision.allowed is False
+    assert decision.blocked is True
+    assert decision.requires_confirmation is False
+    assert policy.audit_trail[-1].outcome == "blocked"
+
+
 def test_policy_requires_confirmation_for_sensitive_fill():
     policy = DeterministicSecurityPolicy()
 

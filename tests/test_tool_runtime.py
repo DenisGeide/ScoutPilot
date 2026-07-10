@@ -97,6 +97,25 @@ def test_browser_failure_is_classified_for_recovery():
     assert result.error_code == "navigation_timeout"
 
 
+def test_local_file_navigation_is_blocked_before_browser_action():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(create_browser_tool_registry(), ToolContext(browser=browser))
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(
+                name="browser.navigate",
+                arguments={"url": "file:///C:/Users/Unknown/.env"},
+            )
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.BLOCKED
+    assert result.failure_kind is ToolFailureKind.SECURITY
+    assert result.error_code == "security_blocked"
+    assert browser.actions == []
+
+
 def test_pre_execution_hook_blocks_before_browser_is_touched():
     browser = FakeBrowser()
 
