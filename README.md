@@ -2,7 +2,7 @@
 
 Scout Pilot — учебный автономный браузерный агент для интервью-проекта. Цель репозитория — показать понятную, поддерживаемую архитектуру, которую Junior+/Middle Python AI developer сможет объяснить, защитить и развивать дальше.
 
-На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer и Planning Engine: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters и provider-neutral планирование задач. Независимая security policy, автономный runtime и демонстрация HH.ru будут добавляться следующими этапами.
+На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine и Hierarchical Memory: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач и ограниченная иерархическая память. Независимая security policy, автономный runtime и демонстрация HH.ru будут добавляться следующими этапами.
 
 ## Установка
 
@@ -29,7 +29,7 @@ python -m pytest
 scout-pilot status
 ```
 
-Ожидаемый результат CLI на текущем этапе — короткое русскоязычное сообщение о том, что фундамент, Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer и Planning Engine готовы. Автономный runtime и live LLM-вызовы из CLI пока не включены.
+Ожидаемый результат CLI на текущем этапе — короткое русскоязычное сообщение о том, что фундамент, Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine и Hierarchical Memory готовы. Автономный runtime и live LLM-вызовы из CLI пока не включены.
 
 Для локальной smoke-проверки видимого браузера:
 
@@ -47,10 +47,11 @@ scout-pilot browser-smoke --headed --hold-seconds 5
 - OpenAI и Anthropic изолированы в LLM Provider Layer и не вызываются в автоматических тестах.
 - Reasoning Engine получает только компактное observation, memory summaries, tool schemas, constraints и budget.
 - Planning Engine строит и пересматривает короткие планы через provider-neutral LLM interface, валидирует шаги локально и не исполняет browser tools.
+- Hierarchical Memory разделяет working, task и episodic memory, выдает bounded summaries и фильтрует приватные данные до сохранения.
 - Независимый Security Policy Layer пока не реализован, но Tool Runtime уже поддерживает pre-execution hook.
 - HH.ru пока не используется.
 - Полные HTML-страницы, DOM-дампы и значения чувствительных полей не входят в публичные модели.
 
 ## Следующий этап
 
-Следующий prompt может реализовать Autonomous Agent Runtime поверх Planning Engine, Reasoning Engine, observations и нейтральных tool schemas.
+Следующий prompt может реализовать Autonomous Agent Runtime поверх Planning Engine, Reasoning Engine, Hierarchical Memory, observations и нейтральных tool schemas.

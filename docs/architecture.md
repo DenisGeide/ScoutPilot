@@ -1,6 +1,6 @@
 # Архитектура
 
-Scout Pilot строится как набор независимых слоев. На этапе фундамента слои представлены протоколами и доменными моделями, без конкретной браузерной или LLM-реализации.
+Scout Pilot строится как набор независимых слоев. Реализованные слои имеют конкретные адаптеры или bounded in-memory реализации; будущие слои пока представлены протоколами и доменными моделями.
 
 ## Слои
 
@@ -11,7 +11,7 @@ Scout Pilot строится как набор независимых слоев
 | Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через provider-neutral схемы, ведет history и structured logs. |
 | LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом, содержит provider-specific tool schema adapters и Reasoning Engine. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет короткий provider-neutral план по user goal, semantic observation, memory summaries и available tool schemas, не исполняя tools. |
-| Hierarchical Memory | `scout_pilot.memory` | Хранит рабочую, задачную и эпизодическую память с учетом приватности. |
+| Hierarchical Memory | `scout_pilot.memory` | Хранит bounded working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует цикл агента, состояния и события выполнения. |
 | Execution Intelligence | `scout_pilot.intelligence` | Оценивает прогресс, причины неудач и необходимость повторных попыток. |
 | Context Budgeting and Compression | `scout_pilot.context` | Контролирует размер контекста и сжимает наблюдения. |
@@ -29,11 +29,14 @@ Scout Pilot строится как набор независимых слоев
 - Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
 - Planning Engine получает только compact observation и нейтральные tool schemas; план не должен содержать CSS selectors, XPath, Playwright locators или hardcoded route paths.
 - Planning Engine может помечать шаги как uncertain или requires_confirmation, но не выполняет browser actions.
+- Hierarchical Memory не является глобальным blob: working memory ограничена текущим циклом, task memory хранит важные факты задачи, episodic memory хранит компактную историю событий.
+- Memory не хранит secrets, cookies, tokens, полные HTML/DOM, session state, browser profiles, приватные screenshots, приватные файлы и значения чувствительных полей.
+- Memory отделена от logs: в нее попадают только отфильтрованные записи, полезные для будущего reasoning context.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
 
 ## Будущие этапы
 
-1. Autonomous Agent Runtime начнет использовать Planning Engine, Reasoning Engine и Tool Runtime в едином цикле.
-2. Memory, Context и Intelligence добавят восстановление, сжатие и оценку прогресса.
+1. Autonomous Agent Runtime начнет использовать Planning Engine, Reasoning Engine, Hierarchical Memory и Tool Runtime в едином цикле.
+2. Context и Intelligence добавят восстановление, сжатие и оценку прогресса поверх bounded memory summaries.
 3. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
 4. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.

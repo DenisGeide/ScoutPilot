@@ -37,6 +37,27 @@ class PlanStepStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class MemoryLayer(str, Enum):
+    """Independent memory layers used by the agent."""
+
+    WORKING = "working"
+    TASK = "task"
+    EPISODIC = "episodic"
+
+
+class MemoryRecordKind(str, Enum):
+    """Typed memory record categories."""
+
+    USER_GOAL = "user_goal"
+    CONSTRAINT = "constraint"
+    CONFIRMED_CHOICE = "confirmed_choice"
+    WARNING = "warning"
+    OBSERVATION = "observation"
+    EVENT = "event"
+    SUMMARY = "summary"
+    FACT = "fact"
+
+
 @dataclass(frozen=True)
 class UserTask:
     """Natural-language task supplied by the user."""
@@ -472,6 +493,23 @@ class MemoryRecord:
     value: Mapping[str, Any]
     scope: str
     contains_private_data: bool = False
+    layer: MemoryLayer = MemoryLayer.TASK
+    kind: MemoryRecordKind = MemoryRecordKind.FACT
+    importance: int = 1
+    source: str | None = None
+    record_id: str = field(default_factory=lambda: uuid4().hex)
+
+    def __post_init__(self) -> None:
+        if not self.key.strip():
+            raise ValueError("Memory record key cannot be empty")
+        if not self.scope.strip():
+            raise ValueError("Memory record scope cannot be empty")
+        object.__setattr__(self, "value", dict(self.value))
+        object.__setattr__(self, "layer", MemoryLayer(self.layer))
+        object.__setattr__(self, "kind", MemoryRecordKind(self.kind))
+        object.__setattr__(self, "importance", max(int(self.importance), 0))
+        if not self.record_id:
+            object.__setattr__(self, "record_id", uuid4().hex)
 
 
 @dataclass(frozen=True)

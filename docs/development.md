@@ -14,6 +14,10 @@
 - Не вызывать реальные LLM API в детерминированных тестах.
 - Планировщик должен ссылаться на semantic tool capabilities, а не на CSS selectors, XPath, Playwright locators или hardcoded routes.
 - Replanning обязан сохранять уже выполненные шаги плана.
+- Память делится на working, task и episodic layers; не добавлять один общий неструктурированный memory blob.
+- В memory можно хранить цель пользователя, ограничения, подтвержденные выборы, warnings и компактные event summaries.
+- В memory нельзя хранить secrets, cookies, tokens, session state, browser profiles, полный HTML/DOM, приватные screenshots, приватные файлы и значения чувствительных полей.
+- Для LLM/context использовать только bounded memory summaries.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.
