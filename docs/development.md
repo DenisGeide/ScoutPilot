@@ -7,6 +7,8 @@
 - Держать прямой импорт Playwright только внутри `scout_pilot.browser`.
 - Не использовать полные HTML-страницы или DOM-дампы для наблюдений.
 - Не включать значения полей ввода в LLM-facing observation.
+- Не добавлять provider-specific schema conversion в Tool Runtime.
+- Проверять tool inputs до обращения к Browser Engine.
 - Не вызывать реальные LLM API в детерминированных тестах.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.

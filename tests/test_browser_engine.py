@@ -1,6 +1,7 @@
 import asyncio
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+from scout_pilot.observation import SemanticObservationEngine
 
 
 def test_browser_navigates_local_page_and_captures_screenshot(tmp_path):
@@ -90,3 +91,60 @@ def test_browser_engine_public_api_does_not_expose_raw_playwright_objects():
     assert "browser" not in public_names
     assert "html" not in public_names
     assert "content" not in public_names
+
+
+def test_browser_clicks_and_fills_by_semantic_ids(tmp_path):
+    page_path = tmp_path / "semantic-actions.html"
+    page_path.write_text(
+        """
+        <!doctype html>
+        <title>Semantic Actions</title>
+        <main>
+          <label for="name">Name</label>
+          <input id="name" name="name" placeholder="Name">
+          <button aria-label="Set title" onclick="document.title = 'Clicked'">Go</button>
+        </main>
+        """,
+        encoding="utf-8",
+    )
+    browser = PlaywrightBrowserEngine(
+        BrowserEngineConfig(
+            user_data_dir=tmp_path / "profile",
+            headless=True,
+            default_timeout_ms=10000,
+            navigation_timeout_ms=10000,
+            screenshots_dir=tmp_path / "screenshots",
+        )
+    )
+    observer = SemanticObservationEngine(browser)
+
+    async def scenario():
+        await browser.start()
+        try:
+            result = await browser.navigate_to(page_path.resolve().as_uri())
+            assert result.success is True
+            observation = await observer.observe()
+            field = next(item for item in observation.form_fields if item.label == "Name")
+            button = next(
+                item
+                for item in observation.interactive_elements
+                if item.accessible_name == "Set title"
+            )
+
+            fill_result = await browser.fill_by_semantic_id(field.field_id, "Alice")
+            assert fill_result.success is True
+            filled_observation = await observer.observe()
+            filled_field = next(
+                item for item in filled_observation.form_fields if item.field_id == field.field_id
+            )
+            assert filled_field.value_state == "filled"
+            assert "Alice" not in str(filled_observation.to_llm_context())
+
+            click_result = await browser.click_by_semantic_id(button.element_id)
+            assert click_result.success is True
+            state = await browser.current_state()
+            assert state.title == "Clicked"
+        finally:
+            await browser.stop()
+
+    asyncio.run(scenario())

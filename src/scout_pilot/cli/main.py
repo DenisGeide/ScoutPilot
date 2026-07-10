@@ -59,7 +59,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _print_status(config: AppConfig) -> None:
     print("Scout Pilot: фундамент проекта готов.")
-    print("Browser Engine и Semantic Observation Engine подключены.")
+    print("Browser Engine, Semantic Observation Engine и Tool Runtime подключены.")
     print("LLM-вызовы пока не включены.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     mode = "без видимого окна" if config.browser_headless else "с видимым окном"

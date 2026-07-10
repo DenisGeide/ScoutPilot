@@ -50,3 +50,15 @@ class BrowserEngine(Protocol):
 
     async def capture_semantic_snapshot(self) -> BrowserPageSnapshot:
         """Capture sanitized page data for semantic observation."""
+
+    async def click_by_semantic_id(self, element_id: str) -> BrowserActionResult:
+        """Click a visible element by its generated semantic ID."""
+
+    async def fill_by_semantic_id(self, element_id: str, value: str) -> BrowserActionResult:
+        """Fill a form field by its generated semantic ID."""
+
+    async def press_key(self, key: str) -> BrowserActionResult:
+        """Press a keyboard key on the current page."""
+
+    async def wait_for_timeout(self, milliseconds: int) -> BrowserActionResult:
+        """Wait for a short browser timeout."""

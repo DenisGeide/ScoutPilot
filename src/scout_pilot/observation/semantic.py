@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import sha1
 from typing import TYPE_CHECKING
 
 from scout_pilot.browser.engine import BrowserEngine
@@ -30,6 +29,12 @@ from scout_pilot.models import (
     PageObservation,
     SemanticElement,
     SemanticSection,
+)
+from scout_pilot.semantic_ids import (
+    semantic_dedupe_key,
+    stable_semantic_id,
+    truncate_optional_semantic_text,
+    truncate_semantic_text,
 )
 
 if TYPE_CHECKING:
@@ -510,13 +515,11 @@ def _state(state: BrowserElementState) -> ElementState:
 
 
 def _stable_id(prefix: str, *parts: object) -> str:
-    seed = "|".join(_normalize(str(part)) for part in parts if part is not None)
-    digest = sha1(seed.encode("utf-8")).hexdigest()[:10]
-    return f"{prefix}_{digest}"
+    return stable_semantic_id(prefix, *parts)
 
 
 def _dedupe_key(*parts: object) -> str:
-    return "|".join(_normalize(str(part)) for part in parts if part is not None)
+    return semantic_dedupe_key(*parts)
 
 
 def _normalize(text: str) -> str:
@@ -524,14 +527,8 @@ def _normalize(text: str) -> str:
 
 
 def _truncate(text: str, limit: int) -> str:
-    normalized = " ".join(text.split())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: max(limit - 1, 0)]}..."
+    return truncate_semantic_text(text, limit)
 
 
 def _truncate_optional(text: str | None, limit: int) -> str | None:
-    if text is None:
-        return None
-    truncated = _truncate(text, limit)
-    return truncated or None
+    return truncate_optional_semantic_text(text, limit)

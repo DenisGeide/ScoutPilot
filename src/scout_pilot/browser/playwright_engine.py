@@ -26,9 +26,19 @@ from scout_pilot.browser.types import (
     BrowserSectionSnapshot,
     ScreenshotResult,
 )
+from scout_pilot.semantic_ids import (
+    stable_semantic_id,
+    truncate_optional_semantic_text,
+)
 
 
 SUPPORTED_URL_SCHEMES = {"http", "https", "file", "about"}
+SEMANTIC_INTERACTIVE_SELECTOR = (
+    "a[href],button,input,textarea,select,summary,"
+    "[role='button'],[role='link'],[role='checkbox'],[role='radio'],"
+    "[role='textbox'],[role='combobox'],[role='menuitem'],[role='tab'],"
+    "[tabindex]:not([tabindex='-1']),[contenteditable='true']"
+)
 
 
 class PlaywrightBrowserEngine:
@@ -235,6 +245,140 @@ class PlaywrightBrowserEngine:
                 error_code="screenshot_error",
             )
 
+    async def click_by_semantic_id(self, element_id: str) -> BrowserActionResult:
+        """Click a visible element by its generated semantic ID."""
+
+        page = self._get_page_or_none()
+        if page is None:
+            return _not_started_result("click_by_semantic_id")
+        if not element_id.strip():
+            return BrowserActionResult(
+                action="click_by_semantic_id",
+                success=False,
+                message="Semantic element ID is empty.",
+                error_code="invalid_semantic_id",
+            )
+
+        try:
+            match = await self._find_element_by_semantic_id(element_id)
+            if match is None:
+                return BrowserActionResult(
+                    action="click_by_semantic_id",
+                    success=False,
+                    message="Semantic element was not found on the current page.",
+                    error_code="semantic_element_not_found",
+                )
+            handle, _snapshot = match
+            await handle.click(timeout=self._settings.default_timeout_ms)
+            return await self._successful_action(
+                "click_by_semantic_id",
+                "Semantic element clicked.",
+            )
+        except PlaywrightTimeoutError as exc:
+            return await self._failed_action("click_by_semantic_id", "click_timeout", exc)
+        except PlaywrightError as exc:
+            return await self._failed_action("click_by_semantic_id", "click_error", exc)
+
+    async def fill_by_semantic_id(self, element_id: str, value: str) -> BrowserActionResult:
+        """Fill a visible form field by its generated semantic ID."""
+
+        page = self._get_page_or_none()
+        if page is None:
+            return _not_started_result("fill_by_semantic_id")
+        if not element_id.strip():
+            return BrowserActionResult(
+                action="fill_by_semantic_id",
+                success=False,
+                message="Semantic element ID is empty.",
+                error_code="invalid_semantic_id",
+            )
+
+        try:
+            match = await self._find_element_by_semantic_id(element_id)
+            if match is None:
+                return BrowserActionResult(
+                    action="fill_by_semantic_id",
+                    success=False,
+                    message="Semantic field was not found on the current page.",
+                    error_code="semantic_element_not_found",
+                )
+
+            handle, snapshot = match
+            input_type = _optional_str(snapshot.get("inputType"))
+            role = _optional_str(snapshot.get("role"))
+            if input_type in {"select", "select-multiple"}:
+                await handle.select_option(value, timeout=self._settings.default_timeout_ms)
+            elif input_type in {"checkbox", "radio"} or role in {"checkbox", "radio"}:
+                normalized_value = value.strip().lower()
+                if normalized_value in {"1", "true", "yes", "on", "checked"}:
+                    await handle.check(timeout=self._settings.default_timeout_ms)
+                elif normalized_value in {"0", "false", "no", "off", "unchecked"}:
+                    await handle.uncheck(timeout=self._settings.default_timeout_ms)
+                else:
+                    return BrowserActionResult(
+                        action="fill_by_semantic_id",
+                        success=False,
+                        message="Checkbox and radio fields require a boolean-like value.",
+                        error_code="invalid_field_value",
+                    )
+            elif input_type is None and role not in {"textbox", "combobox"}:
+                return BrowserActionResult(
+                    action="fill_by_semantic_id",
+                    success=False,
+                    message="Semantic element is not a fillable field.",
+                    error_code="element_not_fillable",
+                )
+            else:
+                await handle.fill(value, timeout=self._settings.default_timeout_ms)
+            return await self._successful_action(
+                "fill_by_semantic_id",
+                "Semantic field filled.",
+            )
+        except PlaywrightTimeoutError as exc:
+            return await self._failed_action("fill_by_semantic_id", "fill_timeout", exc)
+        except PlaywrightError as exc:
+            return await self._failed_action("fill_by_semantic_id", "fill_error", exc)
+
+    async def press_key(self, key: str) -> BrowserActionResult:
+        """Press a keyboard key on the current page."""
+
+        page = self._get_page_or_none()
+        if page is None:
+            return _not_started_result("press_key")
+        if not key.strip():
+            return BrowserActionResult(
+                action="press_key",
+                success=False,
+                message="Keyboard key is empty.",
+                error_code="invalid_key",
+            )
+
+        try:
+            await page.keyboard.press(key)
+            return await self._successful_action("press_key", "Keyboard key pressed.")
+        except PlaywrightError as exc:
+            return await self._failed_action("press_key", "press_key_error", exc)
+
+    async def wait_for_timeout(self, milliseconds: int) -> BrowserActionResult:
+        """Wait for a short browser timeout."""
+
+        page = self._get_page_or_none()
+        if page is None:
+            return _not_started_result("wait_for_timeout")
+        if milliseconds < 0:
+            return BrowserActionResult(
+                action="wait_for_timeout",
+                success=False,
+                message="Wait duration cannot be negative.",
+                error_code="invalid_wait_duration",
+            )
+
+        try:
+            await page.wait_for_timeout(milliseconds)
+            return await self._successful_action("wait_for_timeout", "Wait completed.")
+        except PlaywrightError as exc:
+            return await self._failed_action("wait_for_timeout", "wait_error", exc)
+
     async def capture_semantic_snapshot(self) -> BrowserPageSnapshot:
         """Capture sanitized page data for semantic observation."""
 
@@ -289,6 +433,23 @@ class PlaywrightBrowserEngine:
                 is_visible=False,
                 issues=("observation_error",),
             )
+
+    async def _find_element_by_semantic_id(
+        self,
+        element_id: str,
+    ) -> tuple[Any, dict[str, Any]] | None:
+        page = self._get_page_or_none()
+        if page is None:
+            return None
+
+        handles = await page.locator(SEMANTIC_INTERACTIVE_SELECTOR).element_handles()
+        for handle in handles:
+            snapshot = await handle.evaluate(_SINGLE_ELEMENT_SEMANTIC_SCRIPT)
+            if not snapshot.get("isVisible"):
+                continue
+            if element_id in _semantic_ids_for_element_snapshot(snapshot):
+                return handle, snapshot
+        return None
 
     def _get_page_or_none(self) -> Any | None:
         if self._page is not None:
@@ -505,6 +666,48 @@ def _origin_from_url(url: str | None) -> str | None:
     if parsed.scheme:
         return f"{parsed.scheme}:"
     return None
+
+
+def _semantic_ids_for_element_snapshot(snapshot: dict[str, Any]) -> tuple[str, ...]:
+    role = _optional_str(snapshot.get("role")) or "generic"
+    accessible_name = truncate_optional_semantic_text(
+        _optional_str(snapshot.get("accessibleName")),
+        160,
+    )
+    visible_text = truncate_optional_semantic_text(
+        _optional_str(snapshot.get("visibleText")),
+        160,
+    )
+    target_url = _optional_str(snapshot.get("targetUrl"))
+    input_type = _optional_str(snapshot.get("inputType"))
+    field_name = _optional_str(snapshot.get("fieldName"))
+    placeholder = truncate_optional_semantic_text(
+        _optional_str(snapshot.get("placeholder")),
+        160,
+    )
+
+    ids = [
+        stable_semantic_id(
+            "el",
+            role,
+            accessible_name,
+            visible_text,
+            target_url,
+            input_type,
+        )
+    ]
+    if snapshot.get("isField"):
+        ids.append(
+            stable_semantic_id(
+                "field",
+                role,
+                input_type,
+                accessible_name,
+                placeholder,
+                field_name,
+            )
+        )
+    return tuple(ids)
 
 
 _SEMANTIC_SNAPSHOT_SCRIPT = """
@@ -770,6 +973,146 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
     focusedElement,
     dialogs,
     issues,
+  };
+}
+"""
+
+
+_SINGLE_ELEMENT_SEMANTIC_SCRIPT = """
+(element) => {
+  const doc = element.ownerDocument || document;
+  const win = doc.defaultView || window;
+  const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+  const truncate = (value, limit) => {
+    const text = normalizeText(value);
+    return text.length > limit ? `${text.slice(0, Math.max(limit - 1, 0))}...` : text;
+  };
+  const isVisible = (candidate) => {
+    if (!candidate || !(candidate instanceof Element)) return false;
+    const style = win.getComputedStyle(candidate);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+      return false;
+    }
+    const rect = candidate.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    return rect.bottom >= 0 && rect.right >= 0 && rect.top <= win.innerHeight && rect.left <= win.innerWidth;
+  };
+  const visibleText = (candidate) => {
+    if (!candidate) return "";
+    const children = Array.from(candidate.children || []).filter(isVisible);
+    if (children.length === 0) return normalizeText(candidate.innerText || candidate.textContent || "");
+    const ownText = normalizeText(
+      Array.from(candidate.childNodes || [])
+        .filter((node) => node.nodeType === 3)
+        .map((node) => node.textContent || "")
+        .join(" ")
+    );
+    const childText = normalizeText(children.map((child) => visibleText(child)).join(" "));
+    return normalizeText([ownText, childText].filter(Boolean).join(" "));
+  };
+  const textOf = (candidate, limit = 240) => truncate(visibleText(candidate), limit) || null;
+  const boolAttribute = (candidate, name) => {
+    const value = candidate.getAttribute(name);
+    if (value === null) return null;
+    if (value === "true" || value === "") return true;
+    if (value === "false") return false;
+    return null;
+  };
+  const inputTypeOf = (candidate) => {
+    const tag = candidate.tagName.toLowerCase();
+    if (tag === "input") return normalizeText(candidate.getAttribute("type")).toLowerCase() || "text";
+    if (tag === "textarea") return "textarea";
+    if (tag === "select") return candidate.multiple ? "select-multiple" : "select";
+    if (candidate.isContentEditable) return "contenteditable";
+    return null;
+  };
+  const isField = (candidate) => {
+    const tag = candidate.tagName.toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || candidate.isContentEditable;
+  };
+  const labelsOf = (candidate) => {
+    try {
+      if (candidate.labels && candidate.labels.length > 0) {
+        return normalizeText(Array.from(candidate.labels).map((label) => label.innerText || label.textContent).join(" "));
+      }
+    } catch {
+      return "";
+    }
+    return "";
+  };
+  const labelledByText = (candidate) => {
+    const ids = normalizeText(candidate.getAttribute("aria-labelledby"));
+    if (!ids) return "";
+    return normalizeText(ids.split(" ").map((id) => {
+      const label = doc.getElementById(id);
+      return label ? label.innerText || label.textContent || "" : "";
+    }).join(" "));
+  };
+  const nameOf = (candidate) => {
+    const aria = normalizeText(candidate.getAttribute("aria-label"));
+    if (aria) return aria;
+    const labelled = labelledByText(candidate);
+    if (labelled) return labelled;
+    const labels = labelsOf(candidate);
+    if (labels) return labels;
+    const alt = normalizeText(candidate.getAttribute("alt"));
+    if (alt) return alt;
+    const title = normalizeText(candidate.getAttribute("title"));
+    if (title) return title;
+    const placeholder = normalizeText(candidate.getAttribute("placeholder"));
+    if (placeholder) return placeholder;
+    const type = inputTypeOf(candidate);
+    if (["button", "submit", "reset"].includes(type || "")) {
+      const buttonValue = normalizeText(candidate.getAttribute("value"));
+      if (buttonValue) return buttonValue;
+    }
+    return textOf(candidate, 160);
+  };
+  const roleOf = (candidate) => {
+    const explicit = normalizeText(candidate.getAttribute("role"));
+    if (explicit) return explicit.toLowerCase();
+    const tag = candidate.tagName.toLowerCase();
+    const type = normalizeText(candidate.getAttribute("type")).toLowerCase();
+    if (tag === "a" && candidate.hasAttribute("href")) return "link";
+    if (tag === "button" || ["button", "submit", "reset"].includes(type)) return "button";
+    if (tag === "textarea") return "textbox";
+    if (tag === "select") return "combobox";
+    if (tag === "input") {
+      if (["checkbox"].includes(type)) return "checkbox";
+      if (["radio"].includes(type)) return "radio";
+      if (["range"].includes(type)) return "slider";
+      return "textbox";
+    }
+    if (candidate.isContentEditable) return "textbox";
+    return tag;
+  };
+  const visibleTextOfInteractive = (candidate) => {
+    if (isField(candidate)) {
+      const type = inputTypeOf(candidate);
+      if (!["button", "submit", "reset"].includes(type || "")) return null;
+    }
+    return textOf(candidate, 240);
+  };
+  const stateOf = (candidate) => ({
+    disabled: Boolean(candidate.disabled || candidate.getAttribute("aria-disabled") === "true"),
+    checked: typeof candidate.checked === "boolean" ? Boolean(candidate.checked) : boolAttribute(candidate, "aria-checked"),
+    expanded: boolAttribute(candidate, "aria-expanded"),
+    pressed: boolAttribute(candidate, "aria-pressed"),
+    selected: typeof candidate.selected === "boolean" ? Boolean(candidate.selected) : boolAttribute(candidate, "aria-selected"),
+    required: Boolean(candidate.required || candidate.getAttribute("aria-required") === "true"),
+    readonly: Boolean(candidate.readOnly || candidate.getAttribute("aria-readonly") === "true"),
+  });
+  return {
+    isVisible: isVisible(element),
+    isField: isField(element),
+    role: roleOf(element),
+    accessibleName: nameOf(element),
+    visibleText: visibleTextOfInteractive(element),
+    state: stateOf(element),
+    targetUrl: element.href || null,
+    inputType: inputTypeOf(element),
+    fieldName: normalizeText(element.getAttribute("name")) || null,
+    placeholder: normalizeText(element.getAttribute("placeholder")) || null,
   };
 }
 """
