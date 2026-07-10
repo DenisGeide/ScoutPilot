@@ -1,10 +1,30 @@
 # Scout Pilot
 
-Scout Pilot — учебный автономный браузерный агент для интервью-проекта. Цель репозитория — показать понятную, поддерживаемую архитектуру, которую Junior+/Middle Python AI developer сможет объяснить, защитить и развивать дальше.
+Scout Pilot — учебный автономный браузерный агент для интервью-проекта. Репозиторий показывает, как можно аккуратно разложить браузерную автоматизацию, LLM-провайдера, планирование, память, безопасность и отчеты по понятным слоям.
 
-На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Independent Security Policy Layer, Universal Semantic Navigation и CLI/reporting слой: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач, ограниченная иерархическая память, автономный observe-think-plan-act-evaluate цикл, детерминированная оценка результатов действий, бюджетированная сборка model-facing контекста, независимая проверка действий перед Tool Runtime, generic semantic navigation без hardcoded routes/selectors, демонстрационный поиск вакансий с безопасным JSON-отчетом, single-task CLI dry-run, интерактивный режим, компактный dashboard и безопасные replay/report артефакты.
+Проект не заявляет production-ready статус. Это рабочая основа: ее можно установить, запустить локальные тесты, посмотреть dry-run CLI и выполнить ручной smoke-тест на HH.ru без hardcoded selectors и без автоматической отправки заявок.
 
-## Установка
+## Что уже есть
+
+- Browser Engine на Playwright с persistent profile, navigation, screenshots, cleanup и structured failures.
+- Semantic Observation Engine: компактное представление страницы без полного HTML и значений чувствительных полей.
+- Provider-neutral Tool Runtime с валидацией, history, timeout handling и Security Policy перед выполнением действий.
+- LLM Provider Layer для OpenAI/Anthropic за общим интерфейсом. В автоматических тестах используются только mocks.
+- Planning Engine, Hierarchical Memory, Context Budgeting, Execution Intelligence и Autonomous Agent Runtime.
+- Generic semantic navigation без CSS selectors, XPath, hardcoded URLs и site-specific workflows.
+- CLI на русском: `status`, `run --dry-run`, `interactive`, `browser-smoke`, `demo-vacancy-search`.
+- Безопасные JSON report/replay артефакты без raw HTML, cookies, tokens, browser profiles и приватных путей.
+
+## Ограничения
+
+- Обычный `scout-pilot run` сейчас работает как dry-run. Он показывает ход выполнения и пишет отчет, но не делает live LLM-вызовы и не управляет браузером.
+- HH.ru используется только для ручного smoke-теста. Автоматические тесты не зависят от живого сайта.
+- Live HH.ru может показать CAPTCHA, вход, выбор региона или другую динамическую страницу. Это честный результат smoke-теста, а не повод подделывать успех.
+- Файл `LICENSE` не добавлен, потому что владелец проекта пока не выбрал лицензию.
+
+## Быстрый старт
+
+Требования: Python 3.11+ и установленный браузер Chromium через Playwright.
 
 ```powershell
 python -m venv .venv
@@ -14,62 +34,51 @@ python -m pip install -e ".[dev]"
 python -m playwright install chromium
 ```
 
-Скопируйте пример конфигурации и заполните значения только локально:
+Создайте локальный `.env` из безопасного примера:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Не добавляйте `.env`, профили браузера, cookies, session state, приватные скриншоты и временные отчеты в Git.
-
-## Проверка
+Проверьте установку:
 
 ```powershell
 python -m pytest
 scout-pilot status
 ```
 
-Ожидаемый результат CLI на текущем этапе — короткое русскоязычное сообщение о том, что фундамент, Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Security Policy, Universal Semantic Navigation и CLI/reporting слой готовы. Live LLM-вызовы из CLI пока не включены, поэтому обычный `run` выполняет безопасный dry-run.
-
-Single-task dry-run:
+Запустите безопасный CLI dry-run:
 
 ```powershell
 scout-pilot run "Найди три подходящие вакансии Python AI Developer" --dry-run
 ```
 
-Команда показывает компактный runtime dashboard: задачу, состояние, текущий шаг, выбранный инструмент, прогресс, прошедшее время и следующее действие. Реальные браузерные действия, LLM-вызовы и отправка данных в dry-run не выполняются.
-
-Чтобы увидеть внутренние structured logs на английском:
+Проверка браузера без живых сайтов:
 
 ```powershell
-scout-pilot --verbose run "Проверить страницу" --dry-run --dashboard off
+scout-pilot browser-smoke --headless --hold-seconds 0
 ```
 
-Интерактивный режим:
+## Документация
 
-```powershell
-scout-pilot interactive --dry-run
-```
+- [Установка и конфигурация](docs/setup.md)
+- [Архитектура](docs/architecture.md)
+- [Тестирование](docs/testing.md)
+- [Ручной smoke-тест HH.ru](docs/hh_demo.md)
+- [Заметки для разработки](docs/development.md)
+- [Как вносить изменения](CONTRIBUTING.md)
 
-Отчеты и replay по умолчанию сохраняются в `reports/tmp/`, который исключен из Git. Они не должны содержать raw HTML, cookies, tokens, browser profiles, приватные скриншоты, API keys или значения чувствительных полей.
+## Демо HH.ru
 
-Для локальной smoke-проверки видимого браузера:
+Демо-команда начинает с URL, который передает пользователь, и дальше использует только семантические наблюдения и обнаруженные ссылки. В коде нет маршрутов HH.ru, CSS selectors или XPath под сайт.
 
-```powershell
-scout-pilot browser-smoke --headed --hold-seconds 5
-```
-
-## Демо поиска вакансий
-
-Демо-команда не содержит маршрутов, CSS selectors или XPath под конкретный сайт. Она начинает с URL, который передает пользователь, ищет поле и кнопку поиска через семантическое наблюдение, открывает до трех найденных страниц по обнаруженным ссылкам, готовит короткие заметки и останавливается до отклика, сообщения или отправки формы.
-
-Локальная детерминированная проверка использует synthetic pages:
+Локальная детерминированная проверка демо:
 
 ```powershell
 python -m pytest tests/test_demo_vacancy_search.py
 ```
 
-Ручной live smoke на HH.ru:
+Ручной live smoke:
 
 ```powershell
 scout-pilot demo-vacancy-search `
@@ -81,7 +90,7 @@ scout-pilot demo-vacancy-search `
   --report-path reports/tmp/hh-demo-report.json
 ```
 
-Если запуск поиска на живом сайте выглядит как отправка формы, CLI остановится с русским сообщением безопасности. Продолжайте только если осознанно разрешаете именно поиск:
+Если запуск поиска выглядит как отправка формы, CLI остановится и попросит подтверждение. Для демо подтверждайте только запуск поиска, не отклики и не сообщения:
 
 ```powershell
 scout-pilot demo-vacancy-search `
@@ -94,35 +103,39 @@ scout-pilot demo-vacancy-search `
   --report-path reports/tmp/hh-demo-report.json
 ```
 
-Флаг `--probe-security` полезен для локального демо: он проверяет, что кнопка отклика/отправки останавливается на подтверждении. На живом сайте его лучше включать только во время ручной проверки, когда вы готовы внимательно читать сообщения безопасности. Подтверждать отклик, сообщение или отправку заявки для демонстрации не нужно.
+Подробный чек-лист: [docs/hh_demo.md](docs/hh_demo.md).
 
-HH.ru может показать CAPTCHA, выбор региона, страницу входа или другой динамический экран. Это не считается успешным поиском, и команда должна честно записать состояние в отчет, а не создавать фальшивый результат.
+## Безопасность данных
 
-Подробный чек-лист ручной проверки: [docs/hh_demo.md](docs/hh_demo.md).
+Не коммитьте `.env`, browser profiles, session state, cookies, tokens, приватные скриншоты, временные отчеты и реальные резюме. `.gitignore` уже закрывает типовые локальные артефакты:
 
-## Текущий статус
+- `.env`, `.venv`, caches;
+- `.browser-profiles/`, `.browser-sessions/`, `storage-state*.json`, `cookies*.json`, `tokens*.json`;
+- `reports/tmp/`, `reports/private/`, приватные screenshots и `.har`.
 
-- Код и внутренние идентификаторы написаны на английском.
-- Пользовательский CLI и документация написаны на русском.
-- Playwright подключен только внутри Browser Engine.
-- Semantic Observation Engine получает только контролируемый snapshot от Browser Engine.
-- Tool Runtime использует provider-neutral schemas и не содержит OpenAI/Anthropic adapter logic.
-- OpenAI и Anthropic изолированы в LLM Provider Layer и не вызываются в автоматических тестах.
-- Reasoning Engine получает только компактное observation, memory summaries, tool schemas, constraints и budget.
-- Planning Engine строит и пересматривает короткие планы через provider-neutral LLM interface, валидирует шаги локально и не исполняет browser tools.
-- Hierarchical Memory разделяет working, task и episodic memory, выдает bounded summaries и фильтрует приватные данные до сохранения.
-- Autonomous Agent Runtime координирует observation, planning, reasoning, tool execution, memory и explicit termination через state machine.
-- Execution Intelligence после каждого tool result сравнивает semantic observations, классифицирует прогресс, замечает no-op/repeated failures и рекомендует retry, observe again, replan, confirmation или stop.
-- Context Budgeting оценивает размер model-facing payload, сжимает oversized observations и memory summaries, сохраняет критичные факты, удаляет повторяющийся boilerplate и публикует before/after метрики для runtime/debug.
-- Independent Security Policy Layer детерминированно классифицирует safe, sensitive, destructive и external side-effect actions, требует явное подтверждение на русском и ведет audit trail до выполнения Tool Runtime.
-- Universal Semantic Navigation разрешает намерения через semantic observation IDs, умеет находить generic search fields, планировать заполнение форм по labels/accessibility names, отличать неоднозначные цели и восстанавливаться после stale semantic IDs через повторное наблюдение.
-- Демо поиска вакансий использует только пользовательский стартовый URL и обнаруженные на странице ссылки; HH.ru описан как ручной live smoke, а не как hardcoded workflow.
-- JSON-отчет демо хранит безопасные observations, выбранные tools, security pauses и короткие заметки без полного HTML.
-- CLI `run` принимает задачу на естественном языке и показывает dry-run dashboard без live LLM и без браузерных действий.
-- CLI `interactive` позволяет вводить несколько задач подряд в том же безопасном dry-run режиме.
-- Runtime report/replay артефакты проходят через sanitizer и редактируют raw HTML, приватные пути, cookies, tokens, passwords, secrets и API keys.
-- Полные HTML-страницы, DOM-дампы и значения чувствительных полей не входят в публичные модели.
+Перед коммитом полезно проверить:
 
-## Следующий этап
+```powershell
+git status --short
+git diff --check
+python -m pytest
+```
 
-Следующий prompt может улучшить автономный CLI-режим или расширить replay/recording поверх готового безопасного демо.
+## Структура
+
+```text
+src/scout_pilot/
+  browser/       # изоляция Playwright
+  observation/   # семантические наблюдения страницы
+  tools/         # provider-neutral tool runtime
+  llm/           # адаптеры OpenAI/Anthropic и reasoning
+  planning/      # создание и пересмотр планов
+  memory/        # ограниченная иерархическая память
+  runtime/       # автономный цикл и state machine
+  security/      # детерминированная политика действий
+  navigation/    # разрешение семантических целей
+  reporting/     # безопасные отчеты и replay
+  cli/           # пользовательский CLI на русском
+tests/           # детерминированные unit/integration tests
+docs/            # документация на русском
+```
