@@ -1,3 +1,5 @@
+import pytest
+
 from scout_pilot.models import (
     ActionRisk,
     InteractiveElement,
@@ -88,6 +90,30 @@ def test_policy_requires_confirmation_for_external_side_effect_click():
     assert decision.risk is ActionRisk.EXTERNAL_SIDE_EFFECT
     assert decision.requires_confirmation is True
     assert "отклик" in decision.classification.expected_consequence
+
+
+@pytest.mark.parametrize(
+    ("label", "risk"),
+    [
+        ("Apply to vacancy", ActionRisk.EXTERNAL_SIDE_EFFECT),
+        ("Send message", ActionRisk.EXTERNAL_SIDE_EFFECT),
+        ("Delete account", ActionRisk.DESTRUCTIVE),
+        ("Purchase now", ActionRisk.EXTERNAL_SIDE_EFFECT),
+        ("Checkout", ActionRisk.EXTERNAL_SIDE_EFFECT),
+    ],
+)
+def test_policy_pauses_external_or_destructive_clicks(label, risk):
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(name="browser.click", arguments={"element_id": "el_action"}),
+        SecurityEvaluationContext(observation=_observation("el_action", label)),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk is risk
+    assert decision.requires_confirmation is True
+    assert decision.confirmation is not None
 
 
 def test_policy_ignores_llm_supplied_safe_risk():

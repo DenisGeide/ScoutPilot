@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 from scout_pilot.cli.dashboard import RuntimeDashboard
 from scout_pilot.cli import task_session
@@ -202,6 +203,95 @@ def test_live_cli_surfaces_security_pause_in_russian(tmp_path, monkeypatch):
     assert tool_events[-1]["details"]["tool_status"] == "paused"
 
 
+def test_live_cli_interactive_confirmation_resumes_one_action(tmp_path, monkeypatch):
+    provider = _ApplyConfirmationProvider()
+    monkeypatch.setattr(task_session, "_create_provider", lambda _name, _config: provider)
+    monkeypatch.setattr(task_session, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(task_session, "_read_confirmation_answer", lambda _prompt: "да")
+    site_root = _write_apply_site(tmp_path / "apply-site")
+    messages: list[str] = []
+
+    with LocalDemoServer(site_root) as server:
+        result = asyncio.run(
+            run_cli_task(
+                CliTaskSettings(
+                    task="Нажми Apply и продолжи только после подтверждения",
+                    dry_run=False,
+                    report_path=tmp_path / "approved-report.json",
+                    replay_path=tmp_path / "approved-replay.json",
+                    dashboard="off",
+                    provider="mock",
+                    start_url=server.url_for("index.html"),
+                    max_iterations=4,
+                    headless=True,
+                ),
+                progress=messages.append,
+            )
+        )
+
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    event_names = [event["name"] for event in report["events"]]
+    click_events = [
+        event
+        for event in report["events"]
+        if event["name"] == "tool_execution_finished"
+        and event["details"].get("tool_name") == "browser.click_by_intent"
+    ]
+
+    assert result.success is True
+    assert "confirmation_required" in event_names
+    assert "confirmation_approved" in event_names
+    assert any(event["details"]["tool_status"] == "paused" for event in click_events)
+    assert any(event["details"]["tool_status"] == "success" for event in click_events)
+    assert any("Цель: Apply" in message for message in messages)
+    assert any("Подтверждение принято" in message for message in messages)
+
+
+def test_live_cli_interactive_confirmation_cancel_stops_cleanly(tmp_path, monkeypatch):
+    provider = _ApplyConfirmationProvider()
+    monkeypatch.setattr(task_session, "_create_provider", lambda _name, _config: provider)
+    monkeypatch.setattr(task_session, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(task_session, "_read_confirmation_answer", lambda _prompt: "")
+    site_root = _write_apply_site(tmp_path / "apply-site")
+    messages: list[str] = []
+
+    with LocalDemoServer(site_root) as server:
+        result = asyncio.run(
+            run_cli_task(
+                CliTaskSettings(
+                    task="Нажми Apply только если пользователь подтвердит",
+                    dry_run=False,
+                    report_path=tmp_path / "cancel-report.json",
+                    replay_path=tmp_path / "cancel-replay.json",
+                    dashboard="off",
+                    provider="mock",
+                    start_url=server.url_for("index.html"),
+                    max_iterations=3,
+                    headless=True,
+                ),
+                progress=messages.append,
+            )
+        )
+
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    event_names = [event["name"] for event in report["events"]]
+    click_events = [
+        event
+        for event in report["events"]
+        if event["name"] == "tool_execution_finished"
+        and event["details"].get("tool_name") == "browser.click_by_intent"
+    ]
+
+    assert result.success is False
+    assert "Действие отменено пользователем" in result.message_ru
+    assert "confirmation_required" in event_names
+    assert "task_cancelled" in event_names
+    assert "confirmation_approved" not in event_names
+    assert any(event["details"]["tool_status"] == "paused" for event in click_events)
+    assert not any(event["details"]["tool_status"] == "success" for event in click_events)
+    assert any("Как отменить" in message for message in messages)
+
+
 def test_dashboard_renders_required_status_fields():
     dashboard = RuntimeDashboard(task="Проверить страницу")
     dashboard.render_event(
@@ -254,3 +344,82 @@ def test_dashboard_renders_required_status_fields():
     assert "Статус результата: инструмент выбран, выполнение еще не началось" in output
     assert "Прогресс: 2/4 шагов" in output
     assert "Следующее действие: не выполнять действие в сухом запуске" in output
+
+
+class _ApplyConfirmationProvider:
+    def __init__(self) -> None:
+        self.tool_requests = 0
+
+    async def complete(self, request: LlmProviderRequest) -> LlmProviderResult:
+        if not request.tools:
+            return LlmProviderResult(
+                success=True,
+                response=LlmProviderResponse(
+                    content=json.dumps(
+                        {
+                            "summary": "Click Apply after explicit confirmation.",
+                            "steps": [
+                                {
+                                    "step_id": "apply_click",
+                                    "goal": "Click the Apply button.",
+                                    "tool_name": "browser.click_by_intent",
+                                    "arguments": {"target": "Apply", "role": "button"},
+                                    "rationale": "This action can affect an external system.",
+                                    "requires_confirmation": False,
+                                    "is_uncertain": False,
+                                }
+                            ],
+                            "warnings": ["Requires user confirmation before clicking Apply."],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    finish_reason=LlmFinishReason.STOP,
+                    raw_provider_name="mock",
+                ),
+            )
+        self.tool_requests += 1
+        if self.tool_requests <= 2:
+            return LlmProviderResult(
+                success=True,
+                response=LlmProviderResponse(
+                    tool_calls=(
+                        LlmToolCall(
+                            name="browser.click_by_intent",
+                            arguments={"target": "Apply", "role": "button"},
+                        ),
+                    ),
+                    finish_reason=LlmFinishReason.TOOL_CALLS,
+                    raw_provider_name="mock",
+                ),
+            )
+        return LlmProviderResult(
+            success=True,
+            response=LlmProviderResponse(
+                content="Действие выполнено после явного подтверждения.",
+                finish_reason=LlmFinishReason.STOP,
+                raw_provider_name="mock",
+            ),
+        )
+
+
+def _write_apply_site(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "index.html").write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Apply confirmation fixture</title>
+</head>
+<body>
+  <main>
+    <h1>AI Engineer</h1>
+    <p>This deterministic page contains one external-side-effect style action.</p>
+    <button type="button" aria-label="Apply" onclick="document.body.dataset.clicked='true'; document.title='Applied locally'">Apply</button>
+  </main>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    return root

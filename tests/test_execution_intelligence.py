@@ -166,7 +166,7 @@ def test_evaluator_detects_page_issues_and_invalid_plans():
     assert evaluation.recommended_action is RecoveryAction.STOP
 
 
-def test_evaluator_requests_confirmation_for_confirmable_step():
+def test_evaluator_does_not_request_second_confirmation_after_success():
     evaluator = DeterministicExecutionEvaluator()
     request = _request()
     step = PlanStep(
@@ -189,9 +189,9 @@ def test_evaluator_requests_confirmation_for_confirmable_step():
         )
     )
 
-    assert evaluation.outcome is StepOutcome.UNCERTAIN
-    assert evaluation.recommended_action is RecoveryAction.REQUEST_CONFIRMATION
-    assert evaluation.confirmation_required is True
+    assert evaluation.outcome is StepOutcome.SUCCESS
+    assert evaluation.recommended_action is RecoveryAction.CONTINUE
+    assert evaluation.confirmation_required is False
 
 
 def _plan(tool_name: str = "browser.click") -> ExecutionPlan:

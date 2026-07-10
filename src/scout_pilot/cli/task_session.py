@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import json
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -280,8 +281,78 @@ async def _run_live_task(
                     dry_run=False,
                 )
 
-        async for event in runtime.run(UserTask(settings.task)):
+        task = UserTask(settings.task)
+        while True:
+            async for event in runtime.run(task):
+                _record_and_render_event(settings, dashboard, recorder, event, sink)
+
+            if not _can_resume_after_confirmation(runtime):
+                break
+
+            confirmation = runtime.pending_confirmation
+            if confirmation is None:
+                break
+
+            if not _stdin_is_interactive():
+                sink(
+                    "Запуск не интерактивный: действие не подтверждено автоматически. "
+                    "Подробности сохранены в отчете и replay."
+                )
+                break
+
+            if _ask_user_confirmation(confirmation, sink):
+                confirmation_id = str(confirmation.get("confirmation_id") or "")
+                if runtime.confirm_pending_action(confirmation_id):
+                    event = _event(
+                        "confirmation_approved",
+                        RuntimeStatus.RUNNING,
+                        task=settings.task,
+                        state="waiting_for_confirmation",
+                        current_step="confirmation_approved",
+                        next_action="resume_runtime",
+                        success=True,
+                        confirmation_id=confirmation_id,
+                        message="Пользователь подтвердил одно конкретное действие.",
+                        progress=_progress(0, settings.max_iterations, 0, 0),
+                    )
+                    _record_and_render_event(settings, dashboard, recorder, event, sink)
+                    sink("Подтверждение принято. Агент выполнит только это действие один раз.")
+                    continue
+                sink("Не удалось применить подтверждение: действие больше не ожидает решения.")
+                break
+
+            confirmation_id = str(confirmation.get("confirmation_id") or "")
+            if confirmation_id:
+                runtime.reject_pending_action(confirmation_id)
+            event = _event(
+                "task_cancelled",
+                RuntimeStatus.CANCELLED,
+                task=settings.task,
+                state="cancelled",
+                current_step="confirmation_rejected",
+                next_action="stop",
+                success=False,
+                confirmation_id=confirmation_id,
+                message="Пользователь отменил действие, требующее подтверждения.",
+                progress=_progress(0, settings.max_iterations, 0, 0),
+            )
             _record_and_render_event(settings, dashboard, recorder, event, sink)
+            final_message = "Действие отменено пользователем. Агент остановлен без выполнения внешнего действия."
+            recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
+            artifacts = recorder.write(
+                report_path=settings.report_path,
+                replay_path=settings.replay_path,
+            )
+            sink(final_message)
+            sink(f"Отчет: {artifacts.report_path}")
+            sink(f"Replay-файл: {artifacts.replay_path}")
+            return CliTaskRunResult(
+                success=False,
+                message_ru=final_message,
+                report_path=artifacts.report_path,
+                replay_path=artifacts.replay_path,
+                dry_run=False,
+            )
 
         if runtime.last_result is None:
             final_message = "Runtime завершился без итогового результата."
@@ -501,6 +572,8 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
         return _tool_result_message(event)
     if event.name == "confirmation_required":
         return _confirmation_message(event)
+    if event.name == "confirmation_approved":
+        return "Подтверждение принято. Агент продолжит с одним разрешенным действием."
     if event.name == "task_completed":
         return "Задача завершена."
     if event.name == "task_failed":
@@ -545,19 +618,103 @@ def _tool_result_message(event: RuntimeEvent) -> str:
 
 def _confirmation_message(event: RuntimeEvent) -> str:
     details = event.details
+    request = details.get("confirmation_request")
+    if isinstance(request, dict):
+        return _format_confirmation_notice(request)
     message = details.get("message_ru")
     if isinstance(message, str) and message.strip():
         return message
-    request = details.get("confirmation_request")
-    if isinstance(request, dict):
-        request_message = request.get("message_ru")
-        if isinstance(request_message, str) and request_message.strip():
-            return request_message
     return "Нужно подтверждение пользователя. Агент остановился и не продолжит автоматически."
 
 
 def _safe_json(value: object) -> str:
     return json.dumps(sanitize_for_report(value), ensure_ascii=False, sort_keys=True)
+
+
+def _can_resume_after_confirmation(runtime: AutonomousAgentRuntime) -> bool:
+    result = runtime.last_result
+    return bool(
+        result is not None
+        and result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION
+        and runtime.pending_confirmation
+    )
+
+
+def _ask_user_confirmation(
+    confirmation: Mapping[str, object],
+    sink: ProgressSink,
+) -> bool:
+    sink(_format_confirmation_notice(confirmation, interactive=True))
+    answer = _read_confirmation_answer("Подтвердить это действие один раз? [да/нет]: ")
+    normalized = answer.strip().casefold()
+    return normalized in {"y", "yes", "да", "д", "подтверждаю", "approve"}
+
+
+def _stdin_is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _read_confirmation_answer(prompt: str) -> str:
+    return input(prompt)
+
+
+def _format_confirmation_notice(
+    confirmation: Mapping[str, object],
+    *,
+    interactive: bool = False,
+) -> str:
+    confirmation_id = str(confirmation.get("confirmation_id") or "unknown")
+    tool_name = str(confirmation.get("tool_name") or "unknown")
+    risk = str(confirmation.get("risk") or "unknown")
+    action = str(confirmation.get("action") or "выполнить действие")
+    expected = str(
+        confirmation.get("expected_consequence")
+        or "действие может изменить состояние внешнего сервиса или пользовательские данные."
+    )
+    arguments = confirmation.get("redacted_arguments")
+    target = _confirmation_target(arguments)
+    lines = [
+        "Требуется подтверждение безопасности.",
+        f"ID подтверждения: {confirmation_id}",
+        f"Действие: {action}",
+        f"Инструмент: {tool_name}",
+        f"Риск: {_risk_label_ru(risk)}",
+    ]
+    if target:
+        lines.append(f"Цель: {target}")
+    lines.extend(
+        [
+            f"Очищенные аргументы: {_safe_json(arguments or {})}",
+            f"Почему нужна пауза: {expected}",
+            (
+                "Если подтвердить: агент выполнит только этот запрос инструмента один раз, "
+                "после чего Security Policy снова будет проверять следующие действия."
+            ),
+            "Как отменить: ответьте `нет`, `n` или просто нажмите Enter; агент остановится без выполнения действия.",
+        ]
+    )
+    if not interactive:
+        lines.append("В неинтерактивном запуске действие не подтверждается автоматически.")
+    return "\n".join(lines)
+
+
+def _confirmation_target(arguments: object) -> str:
+    if not isinstance(arguments, Mapping):
+        return ""
+    for key in ("target", "element_id", "url", "key"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _risk_label_ru(risk: str) -> str:
+    return {
+        "safe": "безопасное чтение/навигация",
+        "sensitive": "может затронуть чувствительные данные",
+        "destructive": "может удалить или необратимо изменить данные",
+        "external_side_effect": "может отправить данные или изменить внешний сервис",
+    }.get(risk, risk)
 
 
 def _tool_selected_event(
@@ -608,9 +765,7 @@ def _result_message_ru(result) -> str:
         return result.answer or "Задача завершена."
     if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
         if result.confirmation_request is not None:
-            message = result.confirmation_request.get("message_ru")
-            if isinstance(message, str) and message.strip():
-                return message
+            return _format_confirmation_notice(result.confirmation_request)
         return (
             "Нужно подтверждение пользователя. Агент остановился перед действием, "
             "которое может затронуть внешние системы или данные."

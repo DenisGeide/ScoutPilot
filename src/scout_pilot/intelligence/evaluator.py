@@ -64,10 +64,6 @@ class DeterministicExecutionEvaluator:
         plan_validity = _plan_validity(context.plan)
         reasons: list[str] = []
         alternatives: list[str] = []
-        confirmation_required = bool(
-            context.step is not None and context.step.requires_confirmation
-        )
-
         page_issue_action = _action_for_page_issues(context.after_observation)
         if page_issue_action is not None:
             reasons.append("Current observation contains a blocking page issue.")
@@ -100,22 +96,6 @@ class DeterministicExecutionEvaluator:
                 confirmation_required=True,
                 reasons=reasons,
                 alternatives=("Wait for explicit user confirmation.",),
-                metrics=metrics,
-                tool_result=context.tool_result,
-            )
-
-        if confirmation_required and context.tool_result.success:
-            reasons.append("The completed plan step requires confirmation before continuing.")
-            return _evaluation(
-                outcome=StepOutcome.UNCERTAIN,
-                action=RecoveryAction.REQUEST_CONFIRMATION,
-                validity=plan_validity,
-                progress=progress,
-                page_changed=page_changed,
-                moved_forward=moved_forward,
-                confirmation_required=True,
-                reasons=reasons,
-                alternatives=("Pause and ask the user to confirm the next external effect.",),
                 metrics=metrics,
                 tool_result=context.tool_result,
             )
