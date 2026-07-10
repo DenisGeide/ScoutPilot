@@ -20,6 +20,9 @@ _ASSIGNMENT_SECRET_PATTERN = re.compile(
     r"(?i)\b(password|token|secret|cookie|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)"
 )
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}")
+_PRIVATE_PATH_PATTERN = re.compile(
+    r"(?i)(?:[a-z]:\\(?:users|documents and settings)\\[^\s,;\"']+|/(?:home|users)/[^\s,;\"']+)"
+)
 _SENSITIVE_KEY_HINTS = (
     "api_key",
     "authorization",
@@ -174,6 +177,7 @@ def _sanitize_text(text: str) -> str:
         return "[REDACTED_RAW_HTML]"
     redacted = _ASSIGNMENT_SECRET_PATTERN.sub(r"\1=[REDACTED]", text)
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", redacted)
+    redacted = _PRIVATE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return _truncate(redacted, 1200)
 
 

@@ -23,7 +23,7 @@ def test_dry_run_task_generates_safe_report_and_replay(tmp_path):
     result = asyncio.run(
         run_cli_task(
             CliTaskSettings(
-                task="Найди вакансии token=private-value",
+                task=r"Найди вакансии token=private-value C:\Users\Unknown\Desktop\secret.txt",
                 dry_run=True,
                 report_path=report_path,
                 replay_path=replay_path,
@@ -46,8 +46,11 @@ def test_dry_run_task_generates_safe_report_and_replay(tmp_path):
     assert replay["artifact_kind"] == "runtime_replay"
     assert report["dry_run"] is True
     assert report["final"]["success"] is True
+    assert all("trace" in event["details"] for event in report["events"])
+    assert all("trace" in event["details"] for event in replay["events"])
     assert "браузерные действия" in serialized
     assert "private-value" not in serialized
+    assert "secret.txt" not in serialized
     assert "<html" not in serialized
     assert "browser profile" not in serialized
 
@@ -201,12 +204,33 @@ def test_live_cli_surfaces_security_pause_in_russian(tmp_path, monkeypatch):
 
 def test_dashboard_renders_required_status_fields():
     dashboard = RuntimeDashboard(task="Проверить страницу")
+    dashboard.render_event(
+        RuntimeEvent(
+            name="observation_captured",
+            status=RuntimeStatus.RUNNING,
+            details={
+                "state": "observing",
+                "summary": "Видна форма поиска и список результатов.",
+                "progress": {
+                    "iteration": 2,
+                    "max_iterations": 4,
+                    "completed_steps": 2,
+                    "total_steps": 4,
+                },
+            },
+        )
+    )
     event = RuntimeEvent(
         name="tool_selected",
         status=RuntimeStatus.RUNNING,
         details={
             "state": "executing",
-            "selected_tool": "browser.observe",
+            "selected_tool": "browser.fill",
+            "selected_tool_arguments": {
+                "element_id": "field_1",
+                "value": "[REDACTED]",
+            },
+            "current_plan_step": "Заполнить поле поиска; tool: browser.fill",
             "next_action": "skip_execution",
             "progress": {
                 "iteration": 2,
@@ -221,6 +245,12 @@ def test_dashboard_renders_required_status_fields():
 
     assert "Задача: Проверить страницу" in output
     assert "Состояние: подготовка действия" in output
-    assert "Выбранный инструмент: наблюдение страницы (browser.observe)" in output
+    assert "Итерация: 2/4" in output
+    assert "Шаг плана: Заполнить поле поиска; tool: browser.fill" in output
+    assert "Краткое наблюдение: Видна форма поиска и список результатов." in output
+    assert "Выбранный инструмент: заполнение поля (browser.fill)" in output
+    assert 'Аргументы инструмента: {"element_id": "field_1", "value": "[REDACTED]"}' in output
+    assert "Решение безопасности: ожидает проверки перед выполнением" in output
+    assert "Статус результата: инструмент выбран, выполнение еще не началось" in output
     assert "Прогресс: 2/4 шагов" in output
     assert "Следующее действие: не выполнять действие в сухом запуске" in output

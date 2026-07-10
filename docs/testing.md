@@ -22,7 +22,7 @@ python -m pytest
 - Execution Intelligence: no-op, repeated failures, stale elements, replanning.
 - Universal Semantic Navigation на разных локальных тестовых сайтах.
 - HH.ru-like vacancy flow на локальных тестовых страницах.
-- CLI parsing, dry-run/live report/replay и sanitizer.
+- CLI parsing, dry-run/live report/replay, snapshot-style dashboard messages и sanitizer.
 
 ## Локальные smoke-проверки
 

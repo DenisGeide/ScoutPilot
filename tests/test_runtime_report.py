@@ -22,6 +22,12 @@ def test_runtime_report_redacts_sensitive_values_and_raw_html(tmp_path):
                     "cookie": "session=private",
                     "profile_path": Path("private/profile"),
                     "message": "token=abc123456789",
+                    "trace": {
+                        "selected_tool": "browser.fill",
+                        "tool_arguments": '{"value": "[REDACTED]", "file": "C:\\Users\\Unknown\\Desktop\\secret.txt"}',
+                        "observation_summary": "<html><body>raw</body></html>",
+                        "security_decision": "token=abc123456789",
+                    },
                 },
             )
         )
@@ -33,9 +39,11 @@ def test_runtime_report_redacts_sensitive_values_and_raw_html(tmp_path):
 
     assert "<html" not in serialized
     assert "secret page" not in serialized
+    assert "secret.txt" not in serialized
     assert "private/profile" not in serialized
     assert "abc123456789" not in serialized
     assert "[redacted]" in serialized
+    assert "[redacted_path]" in serialized
 
 
 def test_sanitize_for_report_preserves_safe_structure():

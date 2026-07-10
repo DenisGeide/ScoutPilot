@@ -98,8 +98,7 @@ async def run_cli_task(
 
     events = _dry_run_events(settings.task)
     for event in events:
-        recorder.record_event(event)
-        _render_event(settings, dashboard, event, sink)
+        _record_and_render_event(settings, dashboard, recorder, event, sink)
 
     summary_ru = (
         "Сухой запуск завершен: задача принята, план действий показан, "
@@ -156,8 +155,7 @@ async def _run_live_task(
             error_type=type(exc).__name__,
             progress=_progress(0, settings.max_iterations, 0, 0),
         )
-        recorder.record_event(event)
-        _render_event(settings, dashboard, event, sink)
+        _record_and_render_event(settings, dashboard, recorder, event, sink)
         recorder.finalize(success=False, summary_ru=message_ru, failure_ru=message_ru)
         artifacts = recorder.write(
             report_path=settings.report_path,
@@ -268,8 +266,7 @@ async def _run_live_task(
                 )
 
         async for event in runtime.run(UserTask(settings.task)):
-            recorder.record_event(event)
-            _render_event(settings, dashboard, event, sink)
+            _record_and_render_event(settings, dashboard, recorder, event, sink)
 
         if runtime.last_result is None:
             final_message = "Runtime завершился без итогового результата."
@@ -309,8 +306,7 @@ async def _run_live_task(
             message=final_message,
             progress=_progress(0, settings.max_iterations, 0, 0),
         )
-        recorder.record_event(event)
-        _render_event(settings, dashboard, event, sink)
+        _record_and_render_event(settings, dashboard, recorder, event, sink)
         recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
         artifacts = recorder.write(
             report_path=settings.report_path,
@@ -338,8 +334,7 @@ async def _run_live_task(
             error_type=type(exc).__name__,
             progress=_progress(0, settings.max_iterations, 0, 0),
         )
-        recorder.record_event(event)
-        _render_event(settings, dashboard, event, sink)
+        _record_and_render_event(settings, dashboard, recorder, event, sink)
         recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
         artifacts = recorder.write(
             report_path=settings.report_path,
@@ -375,8 +370,7 @@ async def _execute_initial_navigation(
         schemas,
         next_action="execute_tool",
     )
-    recorder.record_event(selected)
-    _render_event(settings, dashboard, selected, sink)
+    _record_and_render_event(settings, dashboard, recorder, selected, sink)
     result = await tool_runtime.execute(request)
     event = _event(
         "tool_execution_finished",
@@ -391,8 +385,7 @@ async def _execute_initial_navigation(
         error_code=result.error_code,
         progress=_progress(0, settings.max_iterations, 0, 0),
     )
-    recorder.record_event(event)
-    _render_event(settings, dashboard, event, sink)
+    _record_and_render_event(settings, dashboard, recorder, event, sink)
     return result
 
 
@@ -428,18 +421,45 @@ def default_artifact_paths(report_dir: Path, *, prefix: str = "task") -> Runtime
     )
 
 
+def _record_and_render_event(
+    settings: CliTaskSettings,
+    dashboard: RuntimeDashboard,
+    recorder: RuntimeReportRecorder,
+    event: RuntimeEvent,
+    sink: ProgressSink,
+) -> None:
+    dashboard.update(event)
+    recorder.record_event(_event_with_trace(event, dashboard.trace()))
+    _render_event(settings, dashboard, event, sink, already_updated=True)
+
+
+def _event_with_trace(
+    event: RuntimeEvent,
+    trace: object,
+) -> RuntimeEvent:
+    return RuntimeEvent(
+        name=event.name,
+        status=event.status,
+        details={**dict(event.details), "trace": trace},
+    )
+
+
 def _render_event(
     settings: CliTaskSettings,
     dashboard: RuntimeDashboard,
     event: RuntimeEvent,
     sink: ProgressSink,
+    *,
+    already_updated: bool = False,
 ) -> None:
     if settings.dashboard == "off":
         message = _compact_progress_message(event)
         if message:
             sink(message)
         return
-    sink(dashboard.render_event(event))
+    if not already_updated:
+        dashboard.update(event)
+    sink(dashboard.render())
     detail = _event_detail_message(event, verbose=settings.dashboard == "verbose")
     if detail:
         sink(detail)

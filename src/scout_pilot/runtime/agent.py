@@ -226,6 +226,7 @@ class AutonomousAgentRuntime:
                         details={
                             "summary": plan.summary,
                             "steps": len(plan.steps),
+                            "current_plan_step": _first_pending_plan_step_summary(plan),
                             "warnings": list(plan.warnings),
                             "validation_errors": list(plan.validation_errors),
                         },
@@ -347,6 +348,7 @@ class AutonomousAgentRuntime:
                     continue
 
                 selected_tool = reasoning.selected_tool
+                selected_plan_step = _find_plan_step(plan, selected_tool)
                 yield self._event(
                     "tool_selected",
                     RuntimeStatus.RUNNING,
@@ -359,6 +361,7 @@ class AutonomousAgentRuntime:
                             selected_tool,
                             self._tool_schemas,
                         ),
+                        "current_plan_step": _plan_step_summary(selected_plan_step),
                         "next_action": "execute_tool",
                     },
                 )
@@ -384,6 +387,9 @@ class AutonomousAgentRuntime:
                         "message": tool_result.message,
                         "retryable": tool_result.retryable,
                         "error_code": tool_result.error_code,
+                        "security_decision": _security_decision_from_tool_result(
+                            tool_result
+                        ),
                     },
                 )
 
@@ -441,7 +447,7 @@ class AutonomousAgentRuntime:
                         tool_result=tool_result,
                         before_observation=observation,
                         after_observation=post_action_observation,
-                        step=_find_plan_step(plan, selected_tool),
+                        step=selected_plan_step,
                     )
                 )
                 await self._remember_reflection(task_id, iteration, evaluation)
@@ -735,6 +741,7 @@ class AutonomousAgentRuntime:
                     "summary": revised_plan.summary,
                     "reason": reason,
                     "steps": len(revised_plan.steps),
+                    "current_plan_step": _first_pending_plan_step_summary(revised_plan),
                     "task": task.text,
                 },
             )
@@ -1151,6 +1158,29 @@ def _find_plan_step(plan: ExecutionPlan | None, request: ToolRequest) -> PlanSte
     )
 
 
+def _first_pending_plan_step_summary(plan: ExecutionPlan | None) -> str | None:
+    if plan is None:
+        return None
+    step = next(
+        (step for step in plan.steps if step.status is PlanStepStatus.PENDING),
+        None,
+    )
+    return _plan_step_summary(step)
+
+
+def _plan_step_summary(step: PlanStep | None) -> str | None:
+    if step is None:
+        return None
+    parts = [step.goal]
+    if step.tool_name:
+        parts.append(f"tool: {step.tool_name}")
+    if step.requires_confirmation:
+        parts.append("requires confirmation")
+    if step.is_uncertain and step.uncertainty_reason:
+        parts.append(f"uncertain: {step.uncertainty_reason}")
+    return "; ".join(part for part in parts if part)
+
+
 def _step_status_for_evaluation(evaluation: StepEvaluation) -> PlanStepStatus:
     if evaluation.outcome is StepOutcome.SUCCESS:
         return PlanStepStatus.COMPLETED
@@ -1262,6 +1292,38 @@ def _confirmation_from_tool_result(
     if isinstance(confirmation, Mapping):
         return dict(confirmation)
     return None
+
+
+def _security_decision_from_tool_result(
+    result: ToolExecutionResult,
+) -> Mapping[str, object]:
+    if result.status is ToolExecutionStatus.VALIDATION_ERROR:
+        return {
+            "status": "not_run_validation",
+            "reason": "Tool input validation failed before any browser action.",
+        }
+    security = result.data.get("security")
+    if isinstance(security, Mapping):
+        if result.status is ToolExecutionStatus.PAUSED:
+            status = "pause"
+        elif result.status is ToolExecutionStatus.BLOCKED:
+            status = "block"
+        else:
+            status = "allow"
+        return {
+            "status": status,
+            "risk": security.get("risk"),
+            "reason": security.get("reason") or result.message,
+            "audit_id": security.get("audit_id"),
+        }
+    if result.status is ToolExecutionStatus.PAUSED:
+        return {"status": "pause", "reason": result.message}
+    if result.status is ToolExecutionStatus.BLOCKED:
+        return {"status": "block", "reason": result.message}
+    return {
+        "status": "allow",
+        "reason": "Security policy allowed the tool before execution.",
+    }
 
 
 def _redact_tool_arguments(
