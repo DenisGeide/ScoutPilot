@@ -7,10 +7,12 @@ from scout_pilot.models import (
     PageObservation,
     PlanStep,
     PlanStepStatus,
+    SemanticSection,
     ToolRequest,
     UserTask,
 )
 from scout_pilot.planning import ProviderPlanningEngine
+from scout_pilot.planning.types import PlanningSettings
 from scout_pilot.tools import create_browser_tool_registry
 
 
@@ -57,6 +59,8 @@ def test_planner_creates_structured_semantic_plan():
     assert plan.observation_url == "https://example.test"
     assert provider.requests[0].tools == ()
     assert "current_observation" in provider.requests[0].messages[1].content
+    payload = json.loads(provider.requests[0].messages[1].content)
+    assert payload["context_metrics"]["after_tokens"] <= payload["context_metrics"]["before_tokens"]
 
 
 def test_planner_fallback_for_empty_task_does_not_call_provider():
@@ -210,6 +214,52 @@ def test_malformed_provider_response_returns_fallback_plan():
     assert "could not be parsed" in plan.validation_errors[0]
 
 
+def test_planner_request_uses_budgeted_context_for_oversized_inputs():
+    provider = MockLlmProvider(
+        [
+            _json_result(
+                {
+                    "summary": "Use the compact observation.",
+                    "steps": [{"goal": "Observe the page.", "tool_name": "browser.observe"}],
+                    "warnings": [],
+                }
+            )
+        ]
+    )
+    engine = ProviderPlanningEngine(
+        provider,
+        settings=PlanningSettings(
+            max_input_tokens=650,
+            max_output_tokens=200,
+            max_prompt_observation_tokens=180,
+            max_memory_tokens=90,
+            max_memory_summaries=4,
+        ),
+    )
+    memory = [
+        *(f"working.observation: repeated navigation snapshot {index}" for index in range(12)),
+        "task.constraint: do not submit forms.",
+        "security warning: never expose cookies.",
+    ]
+
+    plan = asyncio.run(
+        engine.create_plan(
+            UserTask("Find the relevant result"),
+            _large_observation(),
+            memory_summaries=memory,
+            available_tools=_schemas(),
+        )
+    )
+
+    payload = json.loads(provider.requests[0].messages[1].content)
+    metrics = payload["context_metrics"]
+    assert plan.memory_summaries == tuple(payload["memory_summaries"])
+    assert metrics["after_tokens"] < metrics["before_tokens"]
+    assert metrics["dropped_sections"] > 0
+    assert "task.constraint" in " ".join(payload["memory_summaries"])
+    assert "<html" not in provider.requests[0].messages[1].content.casefold()
+
+
 def _json_result(payload: dict):
     return LlmProviderResult(
         success=True,
@@ -222,6 +272,31 @@ def _observation() -> PageObservation:
         url="https://example.test",
         title="Example",
         summary="A compact page with navigation and search results.",
+    )
+
+
+def _large_observation() -> PageObservation:
+    repeated = "Navigation Home Jobs Profile Messages " * 20
+    return PageObservation(
+        url="https://example.test/search",
+        title="Large",
+        summary="Large search results page." * 40,
+        sections=[
+            *(SemanticSection(f"nav_{index}", "navigation", "Menu", repeated) for index in range(8)),
+            *(
+                SemanticSection(
+                    f"result_{index}",
+                    "main",
+                    f"Result {index}",
+                    (
+                        "Visible result with useful task-relevant text and details. "
+                        "This should be prioritized over repeated navigation. "
+                    )
+                    * 20,
+                )
+                for index in range(10)
+            ),
+        ],
     )
 
 

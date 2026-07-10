@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 from scout_pilot.llm import (
@@ -17,13 +18,14 @@ from scout_pilot.llm import (
     OpenAIToolSchemaAdapter,
     ReasoningContext,
     ReasoningEngine,
+    ReasoningSettings,
     ReasoningStatus,
     create_llm_provider,
 )
 from scout_pilot.llm.anthropic_provider import AnthropicLlmProvider
 from scout_pilot.llm.openai_provider import OpenAILlmProvider
 from scout_pilot.llm.types import LlmProviderError
-from scout_pilot.models import PageObservation
+from scout_pilot.models import PageObservation, SemanticSection
 from scout_pilot.tools import create_browser_tool_registry
 
 
@@ -207,6 +209,8 @@ def test_reasoning_engine_selects_tool_answer_and_special_states():
     assert confirmation_result.status is ReasoningStatus.NEEDS_CONFIRMATION
     assert "raw HTML" in provider.requests[0].messages[0].content
     assert "Compact page" in provider.requests[0].messages[1].content
+    payload = json.loads(provider.requests[0].messages[1].content)
+    assert payload["context_metrics"]["after_tokens"] <= payload["context_metrics"]["before_tokens"]
 
 
 def test_reasoning_engine_handles_provider_failure_and_unknown_tool():
@@ -252,6 +256,45 @@ def test_reasoning_engine_handles_provider_failure_and_unknown_tool():
     assert "unknown tool" in unknown_tool.message.lower()
 
 
+def test_reasoning_engine_budgeting_compresses_oversized_context():
+    provider = MockLlmProvider(
+        [LlmProviderResult(success=True, response=LlmProviderResponse(content="Done."))]
+    )
+    engine = ReasoningEngine(
+        provider,
+        settings=ReasoningSettings(
+            max_input_tokens=620,
+            max_output_tokens=200,
+            max_observation_tokens=180,
+            max_memory_tokens=90,
+        ),
+    )
+
+    result = asyncio.run(
+        engine.reason(
+            ReasoningContext(
+                user_task="Find the most relevant result without submitting forms.",
+                observation=_large_observation(),
+                memory_summaries=[
+                    *(f"working.observation: repeated header snapshot {index}" for index in range(12)),
+                    "task.constraint: do not submit forms.",
+                    "security warning: never expose cookies.",
+                ],
+                available_tools=create_browser_tool_registry().schemas(),
+                budget={"remaining_tokens": 420},
+            )
+        )
+    )
+
+    payload = json.loads(provider.requests[0].messages[1].content)
+    metrics = payload["context_metrics"]
+    assert result.status is ReasoningStatus.ANSWER
+    assert metrics["after_tokens"] < metrics["before_tokens"]
+    assert metrics["dropped_sections"] > 0
+    assert "task.constraint" in " ".join(payload["memory_summaries"])
+    assert "<html" not in provider.requests[0].messages[1].content.casefold()
+
+
 def _config(provider: LlmProviderName) -> LlmProviderConfig:
     return LlmProviderConfig(
         provider=provider,
@@ -272,6 +315,31 @@ def _request() -> LlmProviderRequest:
         model="test-model",
         max_output_tokens=100,
         timeout_seconds=2,
+    )
+
+
+def _large_observation() -> PageObservation:
+    repeated = "Header Home Jobs Profile Messages " * 20
+    return PageObservation(
+        url="https://example.test/search",
+        title="Large",
+        summary="Large search results page." * 40,
+        sections=[
+            *(SemanticSection(f"header_{index}", "header", "Header", repeated) for index in range(8)),
+            *(
+                SemanticSection(
+                    f"result_{index}",
+                    "main",
+                    f"Result {index}",
+                    (
+                        "Visible result with useful task-relevant text and details. "
+                        "This should be prioritized over repeated page chrome. "
+                    )
+                    * 20,
+                )
+                for index in range(10)
+            ),
+        ],
     )
 
 

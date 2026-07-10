@@ -182,6 +182,14 @@ class AutonomousAgentRuntime:
                         memory_summaries=memory_summaries,
                         available_tools=self._tool_schemas,
                     )
+                    budget_event = self._context_budget_event(
+                        "planning",
+                        self._planning_engine,
+                        task_id,
+                        progress,
+                    )
+                    if budget_event is not None:
+                        yield budget_event
                     await self._remember_plan(task_id, plan)
                     progress = _progress(iteration, self._settings, failure_count, plan)
                     yield self._event(
@@ -205,6 +213,14 @@ class AutonomousAgentRuntime:
                     progress,
                 )
                 reasoning = await self._reason(task, task_id, observation)
+                budget_event = self._context_budget_event(
+                    "reasoning",
+                    self._reasoning_engine,
+                    task_id,
+                    progress,
+                )
+                if budget_event is not None:
+                    yield budget_event
                 yield self._event(
                     "reasoning_completed",
                     RuntimeStatus.RUNNING,
@@ -632,7 +648,16 @@ class AutonomousAgentRuntime:
             available_tools=self._tool_schemas,
         )
         await self._remember_plan(task_id, revised_plan)
-        return revised_plan, (
+        events: list[RuntimeEvent] = []
+        budget_event = self._context_budget_event(
+            "planning_revision",
+            self._planning_engine,
+            task_id,
+            progress,
+        )
+        if budget_event is not None:
+            events.append(budget_event)
+        events.append(
             self._event(
                 "plan_revised",
                 RuntimeStatus.RUNNING,
@@ -645,8 +670,9 @@ class AutonomousAgentRuntime:
                     "steps": len(revised_plan.steps),
                     "task": task.text,
                 },
-            ),
+            )
         )
+        return revised_plan, tuple(events)
 
     async def _complete(
         self,
@@ -827,6 +853,30 @@ class AutonomousAgentRuntime:
                 "message_key": message_key,
                 "progress": progress.to_dict(),
                 **dict(details or {}),
+            },
+        )
+
+    def _context_budget_event(
+        self,
+        component: str,
+        owner: object,
+        task_id: str,
+        progress: AgentProgress,
+    ) -> RuntimeEvent | None:
+        metrics = getattr(owner, "last_context_metrics", None)
+        if metrics is None:
+            return None
+        to_dict = getattr(metrics, "to_dict", None)
+        metric_details = dict(to_dict()) if callable(to_dict) else {}
+        return self._event(
+            "context_budget_applied",
+            RuntimeStatus.RUNNING,
+            task_id=task_id,
+            progress=progress,
+            message_key="runtime.context.budget_applied",
+            details={
+                "component": component,
+                "metrics": metric_details,
             },
         )
 

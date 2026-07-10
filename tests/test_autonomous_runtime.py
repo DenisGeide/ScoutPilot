@@ -75,6 +75,9 @@ def test_runtime_runs_mocked_end_to_end_to_completion():
         if event.name == "state_transition"
     )
     assert any(event.name == "reflection_completed" for event in events)
+    budget_events = [event for event in events if event.name == "context_budget_applied"]
+    assert any(event.details["component"] == "reasoning" for event in budget_events)
+    assert all(event.details["metrics"]["after_tokens"] >= 0 for event in budget_events)
     assert events[-1].status is RuntimeStatus.COMPLETED
     memory_summaries = memory.context_summaries(events[0].details["task_id"])
     assert any("Click the primary action" in item for item in memory_summaries)

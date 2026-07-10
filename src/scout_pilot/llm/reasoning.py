@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from scout_pilot.context import (
+    ContextBudgetSettings,
+    ContextCompressionMetrics,
+    DeterministicContextBudgeter,
+)
 from scout_pilot.llm.provider import LlmProvider
 from scout_pilot.llm.types import (
     LlmMessage,
@@ -23,6 +28,9 @@ class ReasoningSettings:
     model: str | None = None
     max_output_tokens: int = 1200
     timeout_seconds: float = 30.0
+    max_input_tokens: int = 8000
+    max_observation_tokens: int = 3500
+    max_memory_tokens: int = 1400
 
 
 class ReasoningEngine:
@@ -32,13 +40,41 @@ class ReasoningEngine:
         self,
         provider: LlmProvider,
         settings: ReasoningSettings | None = None,
+        context_budgeter: DeterministicContextBudgeter | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings or ReasoningSettings()
+        self._context_budgeter = context_budgeter or DeterministicContextBudgeter(
+            ContextBudgetSettings(
+                max_input_tokens=self._settings.max_input_tokens,
+                reserved_output_tokens=self._settings.max_output_tokens,
+                max_observation_tokens=self._settings.max_observation_tokens,
+                max_memory_tokens=self._settings.max_memory_tokens,
+            )
+        )
+        self.last_context_metrics: ContextCompressionMetrics | None = None
 
     async def reason(self, context: ReasoningContext) -> ReasoningResult:
+        budgeted = self._context_budgeter.assemble(
+            user_task=context.user_task,
+            observation=context.observation,
+            memory_summaries=context.memory_summaries,
+            budget=context.budget,
+            max_input_tokens=self._settings.max_input_tokens,
+            reserved_output_tokens=self._settings.max_output_tokens,
+        )
+        self.last_context_metrics = budgeted.metrics
+        budgeted_context = ReasoningContext(
+            user_task=context.user_task,
+            observation=budgeted.observation,
+            memory_summaries=budgeted.memory_summaries,
+            available_tools=context.available_tools,
+            security_constraints=context.security_constraints,
+            confirmation_constraints=context.confirmation_constraints,
+            budget=budgeted.budget,
+        )
         request = LlmProviderRequest(
-            messages=_build_messages(context),
+            messages=_build_messages(budgeted_context, budgeted.metrics),
             tools=context.available_tools,
             model=self._settings.model,
             max_output_tokens=self._settings.max_output_tokens,
@@ -73,7 +109,10 @@ class ReasoningEngine:
         return ReasoningResult.answer(content)
 
 
-def _build_messages(context: ReasoningContext) -> tuple[LlmMessage, ...]:
+def _build_messages(
+    context: ReasoningContext,
+    metrics: ContextCompressionMetrics | None = None,
+) -> tuple[LlmMessage, ...]:
     payload = {
         "user_task": context.user_task,
         "observation": context.observation.to_llm_context() if context.observation else None,
@@ -81,6 +120,7 @@ def _build_messages(context: ReasoningContext) -> tuple[LlmMessage, ...]:
         "security_constraints": list(context.security_constraints),
         "confirmation_constraints": list(context.confirmation_constraints),
         "budget": dict(context.budget),
+        "context_metrics": dict(metrics.to_dict()) if metrics else None,
         "available_tool_names": [tool.name for tool in context.available_tools],
     }
     return (

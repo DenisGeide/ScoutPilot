@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
+from scout_pilot.context import ContextCompressionMetrics
 from scout_pilot.llm.types import LlmMessage, LlmMessageRole
 from scout_pilot.models import ExecutionPlan, PageObservation, PlanStep
 from scout_pilot.planning.types import PlanningSettings
@@ -54,6 +55,7 @@ def build_create_plan_messages(
     memory_summaries: Sequence[str],
     available_tools: Sequence[ToolSchema],
     settings: PlanningSettings,
+    context_metrics: ContextCompressionMetrics | None = None,
 ) -> tuple[LlmMessage, ...]:
     """Build provider-neutral messages for initial planning."""
 
@@ -66,6 +68,7 @@ def build_create_plan_messages(
             settings.max_memory_summaries,
         ),
         "available_tools": _tool_summaries(available_tools, settings),
+        "context_metrics": dict(context_metrics.to_dict()) if context_metrics else None,
     }
     return (
         LlmMessage(role=LlmMessageRole.SYSTEM, content=SYSTEM_PROMPT),
@@ -80,6 +83,7 @@ def build_revision_plan_messages(
     memory_summaries: Sequence[str],
     available_tools: Sequence[ToolSchema],
     settings: PlanningSettings,
+    context_metrics: ContextCompressionMetrics | None = None,
 ) -> tuple[LlmMessage, ...]:
     """Build provider-neutral messages for replanning."""
 
@@ -93,6 +97,7 @@ def build_revision_plan_messages(
             settings.max_memory_summaries,
         ),
         "available_tools": _tool_summaries(available_tools, settings),
+        "context_metrics": dict(context_metrics.to_dict()) if context_metrics else None,
         "existing_plan": {
             "summary": plan.summary,
             "completed_steps_to_preserve": [

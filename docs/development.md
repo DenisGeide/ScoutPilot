@@ -25,6 +25,9 @@
 - Execution Intelligence должен оставаться deterministic и website-neutral: никаких CSS selectors, XPath, provider calls или прямого доступа к Playwright.
 - Reflection summaries должны быть короткими, безопасными для memory и не содержать raw HTML, cookies, tokens, field values или приватные файлы.
 - Replanning вызывается через Planning Engine; evaluator только рекомендует retry/replan/observe/confirm/stop и не исполняет tools.
+- Любой model-facing payload для Reasoning Engine или Planning Engine должен проходить через `DeterministicContextBudgeter`.
+- Context Budgeting должен сохранять user goal, constraints, confirmation choices, security warnings и recent failures, а repeated navigation/header/footer, stale observations и boilerplate отбрасывать первыми.
+- Метрики `before_tokens`/`after_tokens` и признаки emergency compression нужны для runtime/debug events; raw HTML или DOM dumps нельзя отправлять в LLM ради "лучшего" сжатия.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.

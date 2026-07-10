@@ -8,6 +8,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+from scout_pilot.context import (
+    ContextBudgetSettings,
+    ContextCompressionMetrics,
+    DeterministicContextBudgeter,
+)
 from scout_pilot.llm.provider import LlmProvider
 from scout_pilot.llm.types import LlmProviderRequest
 from scout_pilot.models import (
@@ -46,9 +51,20 @@ class ProviderPlanningEngine:
         self,
         provider: LlmProvider,
         settings: PlanningSettings | None = None,
+        context_budgeter: DeterministicContextBudgeter | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings or PlanningSettings()
+        self._context_budgeter = context_budgeter or DeterministicContextBudgeter(
+            ContextBudgetSettings(
+                max_input_tokens=self._settings.max_input_tokens,
+                reserved_output_tokens=self._settings.max_output_tokens,
+                max_observation_tokens=self._settings.max_prompt_observation_tokens,
+                max_memory_tokens=self._settings.max_memory_tokens,
+                max_memory_summaries=self._settings.max_memory_summaries,
+            )
+        )
+        self.last_context_metrics: ContextCompressionMetrics | None = None
 
     async def create_plan(
         self,
@@ -77,6 +93,7 @@ class ProviderPlanningEngine:
 
         preflight_message = _preflight_message(task_text)
         if preflight_message is not None:
+            self.last_context_metrics = None
             return _fallback_plan(
                 task_text=task_text,
                 observation=observation,
@@ -86,19 +103,29 @@ class ProviderPlanningEngine:
                 source="fallback",
             )
 
-        messages = build_create_plan_messages(
+        budgeted = self._context_budgeter.assemble(
             user_task=task_text.strip(),
             observation=observation,
             memory_summaries=memory_summaries,
+            max_input_tokens=self._settings.max_input_tokens,
+            reserved_output_tokens=self._settings.max_output_tokens,
+        )
+        self.last_context_metrics = budgeted.metrics
+
+        messages = build_create_plan_messages(
+            user_task=task_text.strip(),
+            observation=budgeted.observation,
+            memory_summaries=budgeted.memory_summaries,
             available_tools=available_tools,
             settings=self._settings,
+            context_metrics=budgeted.metrics,
         )
         result = await self._complete(messages)
         if not result.success:
             return _fallback_plan(
                 task_text=task_text,
-                observation=observation,
-                memory_summaries=memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 message=_provider_failure_message(result.error),
                 validation_errors=(_provider_failure_message(result.error),),
                 source="fallback",
@@ -108,8 +135,8 @@ class ProviderPlanningEngine:
         try:
             plan = _plan_from_provider_payload(
                 task_text=task_text,
-                observation=observation,
-                memory_summaries=memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 payload=_load_plan_json(result.response.content if result.response else None),
                 source="planner",
                 settings=self._settings,
@@ -117,8 +144,8 @@ class ProviderPlanningEngine:
         except PlanParsingError as exc:
             return _fallback_plan(
                 task_text=task_text,
-                observation=observation,
-                memory_summaries=memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 message=f"Planner response could not be parsed: {exc}",
                 validation_errors=(f"Planner response could not be parsed: {exc}",),
                 source="fallback",
@@ -141,13 +168,23 @@ class ProviderPlanningEngine:
     ) -> ExecutionPlan:
         """Revise a plan without losing already completed steps."""
 
+        budgeted = self._context_budgeter.assemble(
+            user_task=plan.task.text,
+            observation=observation,
+            memory_summaries=memory_summaries or plan.memory_summaries,
+            max_input_tokens=self._settings.max_input_tokens,
+            reserved_output_tokens=self._settings.max_output_tokens,
+        )
+        self.last_context_metrics = budgeted.metrics
+
         messages = build_revision_plan_messages(
             plan=plan,
-            observation=observation,
+            observation=budgeted.observation,
             reason=reason,
-            memory_summaries=memory_summaries,
+            memory_summaries=budgeted.memory_summaries,
             available_tools=available_tools,
             settings=self._settings,
+            context_metrics=budgeted.metrics,
         )
         completed_steps = tuple(
             step for step in plan.steps if step.status is PlanStepStatus.COMPLETED
@@ -156,8 +193,8 @@ class ProviderPlanningEngine:
         if not result.success:
             fallback = _fallback_plan(
                 task_text=plan.task.text,
-                observation=observation,
-                memory_summaries=memory_summaries or plan.memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 message=_provider_failure_message(result.error),
                 validation_errors=(_provider_failure_message(result.error),),
                 source="fallback",
@@ -170,8 +207,8 @@ class ProviderPlanningEngine:
         try:
             revised = _plan_from_provider_payload(
                 task_text=plan.task.text,
-                observation=observation,
-                memory_summaries=memory_summaries or plan.memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 payload=_load_plan_json(result.response.content if result.response else None),
                 source="planner_revision",
                 settings=self._settings,
@@ -180,8 +217,8 @@ class ProviderPlanningEngine:
         except PlanParsingError as exc:
             return _fallback_plan(
                 task_text=plan.task.text,
-                observation=observation,
-                memory_summaries=memory_summaries or plan.memory_summaries,
+                observation=budgeted.observation,
+                memory_summaries=budgeted.memory_summaries,
                 message=f"Planner response could not be parsed: {exc}",
                 validation_errors=(f"Planner response could not be parsed: {exc}",),
                 source="fallback",

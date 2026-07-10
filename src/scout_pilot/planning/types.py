@@ -61,7 +61,10 @@ class PlanningSettings:
     """Planner limits and provider request settings."""
 
     max_steps: int = 6
+    max_input_tokens: int = 8000
     max_prompt_observation_chars: int = 6000
+    max_prompt_observation_tokens: int = 3000
+    max_memory_tokens: int = 1200
     max_memory_summaries: int = 5
     max_tool_schemas: int = 20
     max_output_tokens: int = 1600

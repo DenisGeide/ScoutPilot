@@ -14,7 +14,7 @@ Scout Pilot строится как набор независимых слоев
 | Hierarchical Memory | `scout_pilot.memory` | Хранит bounded working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует observe-think-plan-act-evaluate loop, state machine, memory, tool execution, progress, cancellation и explicit termination. |
 | Execution Intelligence | `scout_pilot.intelligence` | Оценивает tool outcomes, прогресс, no-op действия, повторные ошибки, валидность плана и необходимость retry/replan/confirmation/stop. |
-| Context Budgeting and Compression | `scout_pilot.context` | Контролирует размер контекста и сжимает наблюдения. |
+| Context Budgeting and Compression | `scout_pilot.context` | Оценивает model input size, резервирует output tokens, сжимает observations/memory, удаляет повторяющийся boilerplate и отдает прозрачные before/after metrics для runtime/debug. |
 | Independent Security Policy Layer | `scout_pilot.security` | Классифицирует действия и требует подтверждение до внешних эффектов. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском. |
 | Reporting and replay | `scout_pilot.reporting` | Формирует отчеты и поддерживает безопасное воспроизведение сценариев. |
@@ -27,6 +27,9 @@ Scout Pilot строится как набор независимых слоев
 - Tool Runtime имеет pre-execution hook для будущего Security Policy Layer и не содержит provider-specific schema adapters.
 - Провайдеры LLM и SDK imports не должны выходить за пределы `scout_pilot.llm`.
 - Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
+- Все model-facing запросы в Reasoning Engine и Planning Engine проходят через `DeterministicContextBudgeter`; raw HTML, DOM dumps, cookies, tokens, browser profiles и private files не попадают в payload.
+- Context Budgeting сначала удаляет repeated navigation/header/footer content и stale observations, затем сжимает oversized sections, а при нехватке бюджета включает emergency compression.
+- Context Budgeting обязан сохранять user instructions, confirmation decisions, security warnings, task constraints и recent failures, даже когда low-value memory summaries отбрасываются.
 - Planning Engine получает только compact observation и нейтральные tool schemas; план не должен содержать CSS selectors, XPath, Playwright locators или hardcoded route paths.
 - Planning Engine может помечать шаги как uncertain или requires_confirmation, но не выполняет browser actions.
 - Hierarchical Memory не является глобальным blob: working memory ограничена текущим циклом, task memory хранит важные факты задачи, episodic memory хранит компактную историю событий.
@@ -62,6 +65,5 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 
 ## Будущие этапы
 
-1. Context Budgeting усилит сжатие observation/memory перед Reasoning Engine.
-2. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
-3. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
+1. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
+2. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
