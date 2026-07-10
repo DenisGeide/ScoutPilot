@@ -10,7 +10,13 @@ from typing import Any
 
 from scout_pilot.browser.engine import BrowserEngine
 from scout_pilot.context import DeterministicContextBudgeter
-from scout_pilot.models import InteractiveElement, PageObservation, ToolRequest
+from scout_pilot.models import (
+    FormFieldSummary,
+    InteractiveElement,
+    PageIssueCode,
+    PageObservation,
+    ToolRequest,
+)
 from scout_pilot.observation import ObservationEngine
 from scout_pilot.reporting import DemoReportRecorder
 from scout_pilot.tools import DefaultToolRuntime, ToolExecutionResult, ToolExecutionStatus
@@ -63,6 +69,39 @@ _REQUIREMENT_HINTS = (
     "будет плюсом",
     "желательно",
 )
+_SEARCH_FIELD_HINTS = (
+    "search",
+    "find",
+    "query",
+    "keyword",
+    "role",
+    "position",
+    "vacancy",
+    "поиск",
+    "найти",
+    "запрос",
+    "ваканс",
+    "должност",
+)
+_BLOCKER_CODES = {
+    PageIssueCode.BLOCKED_PAGE.value,
+    PageIssueCode.CAPTCHA_BLOCKING_PAGE.value,
+    PageIssueCode.LOGIN_WALL.value,
+    PageIssueCode.COOKIE_BANNER.value,
+    PageIssueCode.MODAL_DIALOG.value,
+    PageIssueCode.REGION_PROMPT.value,
+    PageIssueCode.EMPTY_PAGE.value,
+    PageIssueCode.NAVIGATION_ERROR.value,
+    PageIssueCode.OBSERVATION_ERROR.value,
+}
+_HARD_BLOCKER_CODES = {
+    PageIssueCode.BLOCKED_PAGE.value,
+    PageIssueCode.CAPTCHA_BLOCKING_PAGE.value,
+    PageIssueCode.LOGIN_WALL.value,
+    PageIssueCode.EMPTY_PAGE.value,
+    PageIssueCode.NAVIGATION_ERROR.value,
+    PageIssueCode.OBSERVATION_ERROR.value,
+}
 
 
 @dataclass(frozen=True)
@@ -161,25 +200,44 @@ class VacancySearchDemoRunner:
                 progress(message_ru)
 
         try:
-            emit("Запускаю браузер для демо.")
+            emit("Запускаю браузер для ручного smoke-демо.")
             await self._browser.start()
 
-            emit("Открываю начальную страницу, переданную пользователем.")
+            emit("Открываю стартовую страницу.")
             navigation = await self._execute(
                 ToolRequest("browser.navigate", {"url": settings.start_url}),
                 report=report,
                 phase="open_start_url",
+                progress=emit,
             )
             if not navigation.success:
                 message_ru = "Не удалось открыть начальную страницу. Подробности записаны в отчет."
                 return _final_result(report, settings, notes, False, "navigation_failed", message_ru)
+            emit("Открыл стартовую страницу.")
 
             initial_observation = await self._observe(report, phase="initial_page")
             if _has_blocking_issue(initial_observation):
                 message_ru = "Страница выглядит заблокированной или пустой. Демо остановлено."
                 return _final_result(report, settings, notes, False, "page_not_available", message_ru)
 
-            emit("Ищу поле поиска по семантическим признакам.")
+            search_field = _find_search_field(initial_observation)
+            if search_field is None:
+                report.record_event(
+                    "search_field_not_found",
+                    phase="initial_page",
+                    message="No generic search field was visible in the semantic observation.",
+                )
+                message_ru = (
+                    "Не удалось найти поле поиска в видимом семантическом наблюдении. "
+                    "Отчет сохранит стартовую страницу и причины остановки."
+                )
+                return _final_result(report, settings, notes, False, "search_field_not_found", message_ru)
+            report.record_event(
+                "search_field_found",
+                phase="initial_page",
+                field=_form_field_to_report(search_field),
+            )
+            emit("Нашел поле поиска.")
             report.record_event(
                 "decision",
                 phase="fill_search_query",
@@ -190,7 +248,7 @@ class VacancySearchDemoRunner:
             )
             fill_request = ToolRequest(
                 "browser.fill_by_label",
-                {"label": "search", "value": settings.query},
+                {"label": _field_label_for_fill(search_field), "value": settings.query},
             )
             fill_result = await self._execute(
                 fill_request,
@@ -198,6 +256,7 @@ class VacancySearchDemoRunner:
                 phase="fill_search_query",
                 auto_confirm=settings.confirm_search_fill,
                 confirmation_source="confirm_search_fill_flag",
+                progress=emit,
             )
             if fill_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
@@ -229,6 +288,7 @@ class VacancySearchDemoRunner:
                 phase="run_search",
                 auto_confirm=settings.confirm_search_submit,
                 confirmation_source="confirm_search_submit_flag",
+                progress=emit,
             )
             if search_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
@@ -250,6 +310,7 @@ class VacancySearchDemoRunner:
                     ),
                     report=report,
                     phase="wait_for_results",
+                    progress=emit,
                 )
 
             results_observation = await self._observe(report, phase="search_results")
@@ -274,10 +335,11 @@ class VacancySearchDemoRunner:
                 return _final_result(report, settings, notes, False, "no_candidates", message_ru)
 
             results_url = results_observation.url
-            emit(f"Нашел кандидатов для чтения: {len(candidates)}.")
+            report.record_discovered_urls(_candidate_urls(candidates))
+            emit(f"Нашел {len(candidates)} кандидатов.")
             security_probe_done = False
             for index, candidate in enumerate(candidates, start=1):
-                emit(f"Открываю найденную страницу {index} из {len(candidates)}.")
+                emit(f"Читаю страницу {index}/{len(candidates)}.")
                 opened = await self._open_candidate(candidate, report=report, phase=f"open_candidate_{index}")
                 if not opened.success:
                     report.record_event(
@@ -292,6 +354,12 @@ class VacancySearchDemoRunner:
                 note = _build_vacancy_note(detail_observation, candidate)
                 notes.append(note)
                 report.record_note(note.to_dict())
+                report.record_page_read(
+                    index=index,
+                    title=note.title,
+                    url=note.url,
+                    requirements=list(note.requirements),
+                )
                 report.record_event(
                     "decision",
                     phase=f"candidate_{index}_evaluation",
@@ -304,13 +372,14 @@ class VacancySearchDemoRunner:
 
                 if settings.probe_security and not security_probe_done:
                     security_probe_done = True
-                    await self._probe_side_effect_button(report)
+                    await self._probe_side_effect_button(report, progress=emit)
 
                 if results_url and index < len(candidates):
                     await self._execute(
                         ToolRequest("browser.navigate", {"url": results_url}),
                         report=report,
                         phase=f"return_to_results_{index}",
+                        progress=emit,
                     )
 
             if not notes:
@@ -320,7 +389,7 @@ class VacancySearchDemoRunner:
             success = True
             stop_reason = "completed"
             message_ru = _final_summary_ru(notes)
-            emit("Демо остановлено до отклика, сообщения или другой внешней отправки.")
+            emit("Остановился перед внешним действием.")
             return _final_result(report, settings, notes, success, stop_reason, message_ru)
         except Exception as exc:
             report.record_event("error", error=str(exc), error_type=type(exc).__name__)
@@ -352,7 +421,12 @@ class VacancySearchDemoRunner:
             phase=phase,
         )
 
-    async def _probe_side_effect_button(self, report: DemoReportRecorder) -> None:
+    async def _probe_side_effect_button(
+        self,
+        report: DemoReportRecorder,
+        *,
+        progress: ProgressCallback | None = None,
+    ) -> None:
         report.record_event(
             "decision",
             phase="probe_security_pause",
@@ -366,7 +440,10 @@ class VacancySearchDemoRunner:
             report=report,
             phase="probe_apply_safety",
             auto_confirm=False,
+            progress=progress,
         )
+        if result.status is ToolExecutionStatus.PAUSED and progress is not None:
+            progress("Остановился перед внешним действием.")
         if result.status is not ToolExecutionStatus.PAUSED:
             report.record_event(
                 "security_probe_result",
@@ -387,6 +464,14 @@ class VacancySearchDemoRunner:
             phase=phase,
             observation=_observation_to_report(observation),
         )
+        blockers = _blocker_entries(observation)
+        if blockers:
+            report.record_blocker(
+                phase=phase,
+                url=observation.url,
+                title=observation.title,
+                issues=blockers,
+            )
         budgeted = self._context_budgeter.assemble(
             user_task=(
                 "Find up to three suitable AI Engineer or Python AI Developer "
@@ -415,6 +500,7 @@ class VacancySearchDemoRunner:
         phase: str,
         auto_confirm: bool = False,
         confirmation_source: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> ToolExecutionResult:
         report.record_event(
             "selected_tool",
@@ -437,6 +523,8 @@ class VacancySearchDemoRunner:
         if result.status is not ToolExecutionStatus.PAUSED:
             return result
 
+        if progress is not None:
+            progress("Запрос требует подтверждения.")
         confirmation = _confirmation_from_result(result)
         report.record_security_pause(
             phase=phase,
@@ -499,6 +587,94 @@ def _final_result(
         notes=tuple(notes),
         security_pauses=report.security_pauses,
     )
+
+
+def _find_search_field(observation: PageObservation) -> FormFieldSummary | None:
+    scored: list[tuple[int, int, FormFieldSummary]] = []
+    fallback: list[tuple[int, FormFieldSummary]] = []
+    for index, field in enumerate(observation.form_fields):
+        if field.state.disabled:
+            continue
+        field_text = _field_text(field)
+        input_type = (field.input_type or "").casefold()
+        role = field.role.casefold()
+        is_text_like = input_type in {"", "text", "search"} or role in {
+            "textbox",
+            "searchbox",
+            "combobox",
+        }
+        if is_text_like:
+            fallback.append((index, field))
+        score = 0
+        if input_type == "search" or role == "searchbox":
+            score += 80
+        if is_text_like:
+            score += 10
+        if any(hint in field_text for hint in _SEARCH_FIELD_HINTS):
+            score += 60
+        if score > 0:
+            scored.append((score, -index, field))
+
+    if scored:
+        return sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)[0][2]
+    if len(fallback) == 1:
+        return fallback[0][1]
+    return None
+
+
+def _field_label_for_fill(field: FormFieldSummary) -> str:
+    for value in (field.label, field.placeholder, field.field_name, field.input_type):
+        if value and str(value).strip():
+            return str(value)
+    return "search"
+
+
+def _field_text(field: FormFieldSummary) -> str:
+    return " ".join(
+        str(part).casefold()
+        for part in (
+            field.role,
+            field.input_type,
+            field.label,
+            field.placeholder,
+            field.field_name,
+        )
+        if part
+    )
+
+
+def _form_field_to_report(field: FormFieldSummary) -> Mapping[str, Any]:
+    return {
+        "id": field.field_id,
+        "role": field.role,
+        "input_type": field.input_type,
+        "label": field.label,
+        "placeholder": field.placeholder,
+        "value_state": field.value_state,
+    }
+
+
+def _candidate_urls(candidates: tuple[InteractiveElement, ...]) -> tuple[str, ...]:
+    urls: list[str] = []
+    for candidate in candidates:
+        if candidate.target_url and candidate.target_url not in urls:
+            urls.append(candidate.target_url)
+    return tuple(urls)
+
+
+def _blocker_entries(observation: PageObservation) -> tuple[Mapping[str, str], ...]:
+    entries = []
+    for issue in observation.issues:
+        if issue.code.value not in _BLOCKER_CODES:
+            continue
+        entries.append(
+            {
+                "code": issue.code.value,
+                "message": issue.message,
+                "severity": issue.severity,
+            }
+        )
+    return tuple(entries)
 
 
 def _select_vacancy_candidates(
@@ -690,8 +866,8 @@ def _nested_value(data: Mapping[str, Any], *keys: str) -> Any:
 
 def _has_blocking_issue(observation: PageObservation) -> bool:
     codes = {issue.code.value for issue in observation.issues}
-    return "blocked_page" in codes or (
-        "empty_page" in codes
+    return bool(codes & _HARD_BLOCKER_CODES) or (
+        PageIssueCode.EMPTY_PAGE.value in codes
         and not observation.interactive_elements
         and not observation.sections
     )

@@ -30,6 +30,10 @@ class DemoReportRecorder:
             "generated_at": datetime.now(tz=timezone.utc).isoformat(),
             "events": [],
             "notes": [],
+            "final_notes": [],
+            "discovered_urls": [],
+            "pages_read": [],
+            "blockers": [],
             "security_pauses": [],
             "stopped_before_side_effects": True,
             "final_summary_ru": None,
@@ -59,8 +63,35 @@ class DemoReportRecorder:
         self._payload["security_pauses"].append(pause)
         self.record_event("security_pause", **pause)
 
+    def record_discovered_urls(self, urls: list[str | None] | tuple[str | None, ...]) -> None:
+        existing = set(self._payload["discovered_urls"])
+        for url in urls:
+            if not url or url in existing:
+                continue
+            safe_url = _json_safe(url)
+            self._payload["discovered_urls"].append(safe_url)
+            existing.add(safe_url)
+
+    def record_page_read(self, **details: Any) -> None:
+        page = {
+            "recorded_at": datetime.now(tz=timezone.utc).isoformat(),
+            **_json_safe(details),
+        }
+        self._payload["pages_read"].append(page)
+        self.record_event("page_read", **page)
+
+    def record_blocker(self, **details: Any) -> None:
+        blocker = {
+            "recorded_at": datetime.now(tz=timezone.utc).isoformat(),
+            **_json_safe(details),
+        }
+        self._payload["blockers"].append(blocker)
+        self.record_event("page_blocker", **blocker)
+
     def record_note(self, note: Mapping[str, Any]) -> None:
-        self._payload["notes"].append(_json_safe(dict(note)))
+        safe_note = _json_safe(dict(note))
+        self._payload["notes"].append(safe_note)
+        self._payload["final_notes"].append(safe_note)
 
     def set_final(self, *, success: bool, stop_reason: str, summary_ru: str) -> None:
         self._payload["success"] = success
@@ -82,6 +113,10 @@ class DemoReportRecorder:
             "generated_at": self._payload["generated_at"],
             "events": self._payload["events"],
             "notes": self._payload["notes"],
+            "final_notes": self._payload["final_notes"],
+            "discovered_urls": self._payload["discovered_urls"],
+            "pages_read": self._payload["pages_read"],
+            "blockers": self._payload["blockers"],
             "security_pauses": self._payload["security_pauses"],
             "final_summary_ru": self._payload["final_summary_ru"],
             "stop_reason": self._payload["stop_reason"],
@@ -136,6 +171,9 @@ def _summarize_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         + event_kinds.count("tool_result_after_confirmation"),
         "security_pause_count": len(payload.get("security_pauses", [])),
         "note_count": len(payload.get("notes", [])),
+        "discovered_url_count": len(payload.get("discovered_urls", [])),
+        "pages_read_count": len(payload.get("pages_read", [])),
+        "blocker_count": len(payload.get("blockers", [])),
         "context_budget_events": event_kinds.count("context_budget"),
         "stopped_before_side_effects": bool(payload.get("stopped_before_side_effects")),
     }

@@ -12,12 +12,14 @@ def test_generic_vacancy_demo_reads_three_pages_and_records_security_pause(tmp_p
     starts = [_write_site_a(tmp_path / "site-a"), _write_site_b(tmp_path / "site-b")]
 
     for index, start_page in enumerate(starts):
+        messages: list[str] = []
         result = _run_demo(
             tmp_path / f"profile-{index}",
             start_page,
             tmp_path / f"report-{index}.json",
             confirm_search_fill=True,
             probe_security=True,
+            progress=messages.append,
         )
 
         assert result.success is True
@@ -29,9 +31,23 @@ def test_generic_vacancy_demo_reads_three_pages_and_records_security_pause(tmp_p
         serialized = json.dumps(report, ensure_ascii=False).casefold()
         assert report["success"] is True
         assert report["stopped_before_side_effects"] is True
+        assert report["start_url"].endswith(start_page.name)
+        assert len(report["discovered_urls"]) == 3
+        assert len(report["pages_read"]) == 3
+        assert report["blockers"] == []
         assert len(report["notes"]) == 3
+        assert report["final_notes"] == report["notes"]
+        assert report["summary"]["discovered_url_count"] == 3
+        assert report["summary"]["pages_read_count"] == 3
+        assert report["summary"]["blocker_count"] == 0
         assert any(event["kind"] == "selected_tool" for event in report["events"])
         assert any(event["kind"] == "observation" for event in report["events"])
+        assert "Открыл стартовую страницу." in messages
+        assert "Нашел поле поиска." in messages
+        assert "Запрос требует подтверждения." in messages
+        assert "Нашел 3 кандидатов." in messages
+        assert "Читаю страницу 1/3." in messages
+        assert "Остановился перед внешним действием." in messages
         assert "[redacted]" in serialized
         assert "<html" not in serialized
         assert "<button" not in serialized
@@ -56,11 +72,52 @@ def test_demo_stops_before_unconfirmed_search_fill(tmp_path):
     assert result.security_pauses[0]["tool_name"] == "browser.fill_by_label"
 
 
-def test_demo_source_has_no_site_specific_routes_or_selectors():
-    source_root = Path(__file__).resolve().parents[1] / "src" / "scout_pilot" / "demo"
-    forbidden = ("hh.ru", "/vacancy", "/jobs", "/search", "xpath", "queryselector", "locator(")
+def test_demo_records_blocker_for_local_hh_like_blocking_page(tmp_path):
+    messages: list[str] = []
+    start_page = _write_blocked_site(tmp_path / "blocked-site")
 
-    for path in source_root.rglob("*.py"):
+    result = _run_demo(
+        tmp_path / "profile-blocked",
+        start_page,
+        tmp_path / "blocked-report.json",
+        confirm_search_fill=True,
+        probe_security=False,
+        progress=messages.append,
+    )
+
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+
+    assert result.success is False
+    assert result.stop_reason == "page_not_available"
+    assert report["blockers"]
+    assert report["summary"]["blocker_count"] >= 1
+    assert "captcha_blocking_page" in serialized
+    assert "Открыл стартовую страницу." in messages
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+
+
+def test_demo_source_has_no_site_specific_routes_or_selectors():
+    source_root = Path(__file__).resolve().parents[1] / "src" / "scout_pilot"
+    scanned_dirs = ("demo", "runtime", "navigation", "tools")
+    forbidden = (
+        "hh.ru",
+        "data-qa",
+        "/vacancy",
+        "/jobs",
+        "/search",
+        "xpath",
+        "queryselector",
+        "locator(",
+    )
+
+    paths = [
+        path
+        for directory in scanned_dirs
+        for path in (source_root / directory).rglob("*.py")
+    ]
+    for path in paths:
         content = path.read_text(encoding="utf-8").casefold()
         for term in forbidden:
             assert term not in content, f"{path} contains demo-specific logic: {term}"
@@ -73,6 +130,7 @@ def _run_demo(
     *,
     confirm_search_fill: bool,
     probe_security: bool,
+    progress=None,
 ):
     browser = PlaywrightBrowserEngine(
         BrowserEngineConfig(
@@ -109,7 +167,8 @@ def _run_demo(
                     confirm_search_fill=confirm_search_fill,
                     probe_security=probe_security,
                     wait_after_search_ms=50,
-                )
+                ),
+                progress=progress,
             )
 
     return asyncio.run(scenario())
@@ -207,6 +266,24 @@ def _write_site_b(root: Path) -> Path:
               <a href="role-three.html"><strong>Applied LLM Engineer B</strong><span>Open role</span></a>
             </article>
           </section>
+        </main>
+        """,
+        encoding="utf-8",
+    )
+    return page
+
+
+def _write_blocked_site(root: Path) -> Path:
+    root.mkdir()
+    page = root / "index.html"
+    page.write_text(
+        """
+        <!doctype html>
+        <title>Human verification</title>
+        <main>
+          <h1>Verify you are human</h1>
+          <p>CAPTCHA check is required before browsing this page.</p>
+          <button type="button">Continue</button>
         </main>
         """,
         encoding="utf-8",

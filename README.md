@@ -157,8 +157,11 @@ scout-pilot demo-vacancy-search `
   --max-vacancies 3 `
   --headed `
   --confirm-search-fill `
+  --probe-security `
   --report-path reports/tmp/hh-demo-report.json
 ```
+
+Во время запуска CLI пишет короткие сообщения вроде `Открыл стартовую страницу`, `Нашел поле поиска`, `Нашел N кандидатов`, `Читаю страницу 1/N` и `Остановился перед внешним действием`. Отчет содержит `start_url`, `discovered_urls`, `pages_read`, `blockers`, `security_pauses` и `final_notes`.
 
 Если запуск поиска выглядит как отправка формы, CLI остановится и попросит подтверждение. Для демо подтверждайте только запуск поиска, не отклики и не сообщения:
 
