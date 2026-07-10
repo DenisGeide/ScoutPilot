@@ -18,6 +18,10 @@
 - В memory можно хранить цель пользователя, ограничения, подтвержденные выборы, warnings и компактные event summaries.
 - В memory нельзя хранить secrets, cookies, tokens, session state, browser profiles, полный HTML/DOM, приватные screenshots, приватные файлы и значения чувствительных полей.
 - Для LLM/context использовать только bounded memory summaries.
+- Runtime не должен импортировать Playwright или provider SDKs; он вызывает Observation Engine, Planning Engine, Reasoning Engine, Tool Runtime и Memory через их интерфейсы.
+- Любое завершение runtime должно иметь явный `AgentTaskResult` и понятный `termination_reason`.
+- State transitions должны иметь reason и внутренний structured log на английском.
+- Runtime tests должны использовать mocked providers, fake tools и synthetic observations, без live LLM и live сайтов.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.

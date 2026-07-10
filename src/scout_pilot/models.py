@@ -24,6 +24,7 @@ class RuntimeStatus(str, Enum):
     RUNNING = "running"
     WAITING_FOR_CONFIRMATION = "waiting_for_confirmation"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
