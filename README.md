@@ -2,7 +2,7 @@
 
 Scout Pilot — учебный автономный браузерный агент для интервью-проекта. Цель репозитория — показать понятную, поддерживаемую архитектуру, которую Junior+/Middle Python AI developer сможет объяснить, защитить и развивать дальше.
 
-На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Independent Security Policy Layer и Universal Semantic Navigation: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач, ограниченная иерархическая память, автономный observe-think-plan-act-evaluate цикл, детерминированная оценка результатов действий, бюджетированная сборка model-facing контекста, независимая проверка действий перед Tool Runtime и generic semantic navigation без hardcoded routes/selectors. Демонстрация HH.ru будет добавляться следующим этапом.
+На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Independent Security Policy Layer, Universal Semantic Navigation и end-to-end demo/reporting слой: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач, ограниченная иерархическая память, автономный observe-think-plan-act-evaluate цикл, детерминированная оценка результатов действий, бюджетированная сборка model-facing контекста, независимая проверка действий перед Tool Runtime, generic semantic navigation без hardcoded routes/selectors и демонстрационный поиск вакансий с безопасным JSON-отчетом.
 
 ## Установка
 
@@ -37,6 +37,47 @@ scout-pilot status
 scout-pilot browser-smoke --headed --hold-seconds 5
 ```
 
+## Демо поиска вакансий
+
+Демо-команда не содержит маршрутов, CSS selectors или XPath под конкретный сайт. Она начинает с URL, который передает пользователь, ищет поле и кнопку поиска через семантическое наблюдение, открывает до трех найденных страниц по обнаруженным ссылкам, готовит короткие заметки и останавливается до отклика, сообщения или отправки формы.
+
+Локальная детерминированная проверка использует synthetic pages:
+
+```powershell
+python -m pytest tests/test_demo_vacancy_search.py
+```
+
+Ручной live smoke на HH.ru:
+
+```powershell
+scout-pilot demo-vacancy-search `
+  --start-url https://hh.ru `
+  --query "AI Engineer Python AI Developer" `
+  --max-vacancies 3 `
+  --headed `
+  --confirm-search-fill `
+  --report-path reports/tmp/hh-demo-report.json
+```
+
+Если запуск поиска на живом сайте выглядит как отправка формы, CLI остановится с русским сообщением безопасности. Продолжайте только если осознанно разрешаете именно поиск:
+
+```powershell
+scout-pilot demo-vacancy-search `
+  --start-url https://hh.ru `
+  --query "AI Engineer Python AI Developer" `
+  --max-vacancies 3 `
+  --headed `
+  --confirm-search-fill `
+  --confirm-search-submit `
+  --report-path reports/tmp/hh-demo-report.json
+```
+
+Флаг `--probe-security` полезен для локального демо: он проверяет, что кнопка отклика/отправки останавливается на подтверждении. На живом сайте его лучше включать только во время ручной проверки, когда вы готовы внимательно читать сообщения безопасности. Подтверждать отклик, сообщение или отправку заявки для демонстрации не нужно.
+
+HH.ru может показать CAPTCHA, выбор региона, страницу входа или другой динамический экран. Это не считается успешным поиском, и команда должна честно записать состояние в отчет, а не создавать фальшивый результат.
+
+Подробный чек-лист ручной проверки: [docs/hh_demo.md](docs/hh_demo.md).
+
 ## Текущий статус
 
 - Код и внутренние идентификаторы написаны на английском.
@@ -53,9 +94,10 @@ scout-pilot browser-smoke --headed --hold-seconds 5
 - Context Budgeting оценивает размер model-facing payload, сжимает oversized observations и memory summaries, сохраняет критичные факты, удаляет повторяющийся boilerplate и публикует before/after метрики для runtime/debug.
 - Independent Security Policy Layer детерминированно классифицирует safe, sensitive, destructive и external side-effect actions, требует явное подтверждение на русском и ведет audit trail до выполнения Tool Runtime.
 - Universal Semantic Navigation разрешает намерения через semantic observation IDs, умеет находить generic search fields, планировать заполнение форм по labels/accessibility names, отличать неоднозначные цели и восстанавливаться после stale semantic IDs через повторное наблюдение.
-- HH.ru пока не используется.
+- Демо поиска вакансий использует только пользовательский стартовый URL и обнаруженные на странице ссылки; HH.ru описан как ручной live smoke, а не как hardcoded workflow.
+- JSON-отчет демо хранит безопасные observations, выбранные tools, security pauses и короткие заметки без полного HTML.
 - Полные HTML-страницы, DOM-дампы и значения чувствительных полей не входят в публичные модели.
 
 ## Следующий этап
 
-Следующий prompt может развить reporting/replay, CLI-запуск или демонстрационный сценарий поверх готового runtime loop.
+Следующий prompt может улучшить автономный CLI-режим или расширить replay/recording поверх готового безопасного демо.

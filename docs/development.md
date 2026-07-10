@@ -34,6 +34,8 @@
 - Security Policy должен выполняться перед каждым `tool.execute()` и не должен доверять LLM-provided `risk`, prompt-инструкциям или аргументам вроде `safe=true`.
 - Confirmation-required action возвращает paused result и русское сообщение; runtime не продолжает автоматически, а разрешает только один exact request после явного подтверждения.
 - Security audit trail хранит классификацию, outcome и confirmation id, но не должен раскрывать значения чувствительных полей.
+- Demo flows должны начинаться с URL, переданного пользователем, и работать через semantic observations/tool runtime. HH.ru можно использовать только как live smoke target, а не как hardcoded workflow.
+- Demo reports должны хранить безопасные observations, выбранные tools, security pauses и short notes; не включать полный HTML, DOM dumps, cookies, tokens, profile data, приватные скриншоты и значения чувствительных полей.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.
@@ -53,6 +55,20 @@ scout-pilot status
 ```powershell
 scout-pilot browser-smoke --headed --hold-seconds 5
 ```
+
+Локальная проверка demo flow без живого сайта:
+
+```powershell
+python -m pytest tests/test_demo_vacancy_search.py
+```
+
+Ручной live smoke для HH.ru:
+
+```powershell
+scout-pilot demo-vacancy-search --start-url https://hh.ru --query "AI Engineer Python AI Developer" --max-vacancies 3 --headed --confirm-search-fill --report-path reports/tmp/hh-demo-report.json
+```
+
+Если CLI остановился на подтверждении запуска поиска, продолжайте только для самого поиска и только с явным флагом `--confirm-search-submit`. Отклики, сообщения и отправку заявок в демо не подтверждать.
 
 ## Что считается готовым этапом
 

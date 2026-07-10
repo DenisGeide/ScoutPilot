@@ -18,7 +18,8 @@ Scout Pilot строится как набор независимых слоев
 | Context Budgeting and Compression | `scout_pilot.context` | Оценивает model input size, резервирует output tokens, сжимает observations/memory, удаляет повторяющийся boilerplate и отдает прозрачные before/after metrics для runtime/debug. |
 | Independent Security Policy Layer | `scout_pilot.security` | Детерминированно классифицирует tool requests как `safe`, `sensitive`, `destructive` или `external_side_effect`, требует подтверждение на русском и ведет audit trail. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском. |
-| Reporting and replay | `scout_pilot.reporting` | Формирует отчеты и поддерживает безопасное воспроизведение сценариев. |
+| Reporting and replay | `scout_pilot.reporting` | Формирует HTML-free JSON-отчеты, фиксирует безопасные replay events, выбранные tools, security pauses и итоговые заметки. |
+| Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. |
 
 ## Правила границ
 
@@ -45,6 +46,9 @@ Scout Pilot строится как набор независимых слоев
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
 - Runtime не продолжает автоматически после confirmation-required action: подтверждение только разрешает один следующий exact tool request.
 - Stale semantic IDs восстанавливаются через повторное observation и remap кандидата по тому же website-neutral intent; старые DOM handles не сохраняются.
+- Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.
+- HH.ru допускается как live smoke target в документации, но не как source-code workflow: в `scout_pilot.demo` не должно быть HH.ru routes, CSS selectors, XPath или assumptions о внутренних путях сайта.
+- Demo reports включают компактные observations, tool decisions, security pauses и short notes; полный HTML, DOM dumps, cookies, tokens, profile data и значения чувствительных полей туда не попадают.
 - Execution Intelligence получает только compact observations, provider-neutral tool results и plan state; он не обращается к Playwright, provider SDKs, raw HTML, cookies или browser profiles.
 - Reflection summaries сохраняются в memory как компактные episodic summaries, а не как raw traces.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
@@ -72,4 +76,5 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 
 ## Будущие этапы
 
-1. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
+1. Полноценный автономный CLI-режим может использовать уже готовые semantic tools, security confirmations и безопасный report/replay формат.
+2. Live HH.ru smoke остается ручной проверкой: автоматические тесты продолжают опираться на synthetic pages и mocked providers.
