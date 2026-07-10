@@ -37,6 +37,7 @@ def test_dry_run_task_generates_safe_report_and_replay(tmp_path):
     assert replay["artifact_kind"] == "runtime_replay"
     assert report["dry_run"] is True
     assert report["final"]["success"] is True
+    assert "браузерные действия" in serialized
     assert "private-value" not in serialized
     assert "<html" not in serialized
     assert "browser profile" not in serialized
@@ -56,7 +57,7 @@ def test_live_cli_mode_fails_clearly_and_writes_report(tmp_path):
     )
 
     assert result.success is False
-    assert "live-режим" in result.message_ru
+    assert "реальными браузерными действиями" in result.message_ru
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
     assert report["final"]["success"] is False
     assert "dry-run" in report["final"]["failure_ru"]
@@ -83,7 +84,7 @@ def test_dashboard_renders_required_status_fields():
     output = dashboard.render_event(event)
 
     assert "Задача: Проверить страницу" in output
-    assert "Состояние: executing" in output
-    assert "Выбранный инструмент: browser.observe" in output
+    assert "Состояние: подготовка действия" in output
+    assert "Выбранный инструмент: наблюдение страницы (browser.observe)" in output
     assert "Прогресс: 2/4 шагов" in output
-    assert "Следующее действие: skip_execution" in output
+    assert "Следующее действие: не выполнять действие в сухом запуске" in output

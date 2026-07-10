@@ -69,8 +69,9 @@ async def run_cli_task(
 
     if not settings.dry_run:
         message_ru = (
-            "Полный live-режим из CLI пока не подключен. Запустите команду с --dry-run "
-            "или используйте demo-vacancy-search для браузерной демонстрации."
+            "Режим с реальными браузерными действиями из команды run пока не подключен. "
+            "Для безопасной проверки повторите команду с --dry-run. Для браузерной "
+            "демонстрации используйте interview-demo или demo-vacancy-search."
         )
         event = _event(
             "task_failed",
@@ -106,7 +107,7 @@ async def run_cli_task(
 
     summary_ru = (
         "Сухой запуск завершен: задача принята, план действий показан, "
-        "реальные браузерные действия и отправка данных не выполнялись."
+        "браузерные действия, вызовы LLM и отправка данных не выполнялись."
     )
     recorder.finalize(success=True, summary_ru=summary_ru)
     artifacts = recorder.write(
@@ -115,7 +116,7 @@ async def run_cli_task(
     )
     sink(summary_ru)
     sink(f"Отчет: {artifacts.report_path}")
-    sink(f"Replay: {artifacts.replay_path}")
+    sink(f"Replay-файл: {artifacts.replay_path}")
 
     logger.info(
         "cli_task_completed",
@@ -163,7 +164,7 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
     if event.name == "tool_selected":
         return "Инструмент выбран только для показа; выполнение пропущено."
     if event.name == "task_completed":
-        return "Задача завершена в dry-run режиме."
+        return "Задача завершена в режиме сухого запуска."
     if event.name == "task_failed":
         return "Задача остановлена."
     return ""
@@ -204,12 +205,12 @@ def _dry_run_events(task: str) -> tuple[RuntimeEvent, ...]:
             current_step="plan_created",
             next_action="prepare_observation",
             progress=_progress(1, 4, 1, 4),
-            plan_summary="Dry run plan prepared without browser or provider calls.",
+            plan_summary="План сухого запуска подготовлен без браузера и LLM-вызовов.",
             steps=[
-                "Understand the task and safety limits.",
-                "Observe the page only when a live browser run is enabled.",
-                "Select semantic tools through Tool Runtime.",
-                "Stop before confirmation-required actions.",
+                "Понять задачу и ограничения безопасности.",
+                "Читать страницу только в режиме с реальным браузером.",
+                "Выбирать действия через Tool Runtime.",
+                "Останавливаться перед действиями, требующими подтверждения.",
             ],
         ),
         _event(
@@ -234,7 +235,10 @@ def _dry_run_events(task: str) -> tuple[RuntimeEvent, ...]:
             current_step="placeholder_observation",
             next_action="select_tool",
             progress=_progress(2, 4, 2, 4),
-            observation_summary="Dry run placeholder. No raw HTML, screenshots or local browser data were read.",
+            observation_summary=(
+                "Сухой запуск: браузер не открывался, raw HTML, скриншоты и локальные "
+                "данные браузера не читались."
+            ),
         ),
         _event(
             "tool_selected",
@@ -258,7 +262,7 @@ def _dry_run_events(task: str) -> tuple[RuntimeEvent, ...]:
             current_step="prepare_summary",
             next_action="write_report",
             progress=_progress(3, 4, 3, 4),
-            message="Dry run completed without provider calls.",
+            message="Сухой запуск завершен без вызовов LLM-провайдера.",
         ),
         _event(
             "task_completed",
@@ -272,8 +276,8 @@ def _dry_run_events(task: str) -> tuple[RuntimeEvent, ...]:
             progress=_progress(4, 4, 4, 4),
             success=True,
             answer=(
-                "Dry run only: no browser actions, LLM calls, form submissions or external "
-                "side effects were executed."
+                "Это был только сухой запуск: браузерные действия, вызовы LLM, отправка "
+                "форм и внешние эффекты не выполнялись."
             ),
         ),
     )

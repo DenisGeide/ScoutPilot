@@ -12,7 +12,7 @@ def test_status_command_prints_russian_placeholder(capsys):
     assert exit_code == 0
     assert "проект установлен, основные слои доступны" in captured.out
     assert "Universal Semantic Navigation" in captured.out
-    assert "demo/reporting слой подключены" in captured.out
+    assert "слой demo/reporting" in captured.out
     assert "Semantic Observation Engine" in captured.out
     assert "scout-pilot run" in captured.out
 
@@ -143,7 +143,7 @@ def test_interview_demo_runs_local_synthetic_site(tmp_path, capsys):
     serialized = json.dumps(report, ensure_ascii=False).casefold()
 
     assert exit_code == 0
-    assert "Локальное interview demo завершено" in captured.out
+    assert "Локальное демо для интервью завершено" in captured.out
     assert report["success"] is True
     assert report["summary"]["observation_count"] >= 1
     assert report["summary"]["tool_decision_count"] >= 1

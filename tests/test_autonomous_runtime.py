@@ -298,6 +298,8 @@ def test_runtime_waits_for_confirmation_when_reasoning_requests_it():
     assert runtime.last_result.status is RuntimeStatus.WAITING_FOR_CONFIRMATION
     assert runtime.last_result.final_state is AgentState.WAITING_FOR_CONFIRMATION
     assert events[-1].name == "confirmation_required"
+    assert "Нужно подтверждение пользователя" in events[-1].details["message_ru"]
+    assert "Submit form" not in events[-1].details["message_ru"]
 
 
 def test_runtime_pauses_and_resumes_security_confirmation():

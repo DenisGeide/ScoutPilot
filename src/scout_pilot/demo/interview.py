@@ -83,7 +83,7 @@ async def run_local_interview_demo(
         if progress is not None:
             progress(message_ru)
 
-    emit("Готовлю локальный тестовый сайт для interview demo.")
+    emit("Готовлю локальный тестовый сайт для демо интервью.")
     emit(f"Постоянный профиль браузера настроен: {settings.profile_dir}. Путь исключен из Git.")
 
     with LocalDemoServer(site.root) as server:
@@ -127,7 +127,7 @@ async def run_local_interview_demo(
         )
 
     emit(
-        "Interview demo записало семантические наблюдения, решения по инструментам, "
+        "Локальное демо записало семантические наблюдения, решения по инструментам, "
         "метрики бюджета контекста и паузу безопасности в JSON-артефакты."
     )
     return InterviewDemoResult(

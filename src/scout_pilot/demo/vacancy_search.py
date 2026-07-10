@@ -201,8 +201,10 @@ class VacancySearchDemoRunner:
             )
             if fill_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
-                    "Демо остановлено: ввод поискового запроса требует явного подтверждения. "
-                    "Проверьте сообщение безопасности в отчете."
+                    "Демо остановлено до ввода поискового запроса: Security Policy требует "
+                    "явное подтверждение, потому что поле формы может затронуть данные на странице. "
+                    "Действие не выполнено. Чтобы продолжить только ввод запроса, повторите команду "
+                    "с --confirm-search-fill. Чтобы отменить, ничего подтверждать не нужно."
                 )
                 return _final_result(report, settings, notes, False, "confirmation_required", message_ru)
             if not fill_result.success:
@@ -230,8 +232,10 @@ class VacancySearchDemoRunner:
             )
             if search_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
-                    "Демо остановлено: запуск поиска выглядит как отправка формы и требует "
-                    "явного подтверждения."
+                    "Демо остановлено до запуска поиска: кнопка выглядит как отправка формы, "
+                    "поэтому Security Policy требует явное подтверждение. Действие не выполнено. "
+                    "Чтобы продолжить только запуск поиска, повторите команду с "
+                    "--confirm-search-submit. Чтобы отменить, ничего подтверждать не нужно."
                 )
                 return _final_result(report, settings, notes, False, "confirmation_required", message_ru)
             if not search_result.success:

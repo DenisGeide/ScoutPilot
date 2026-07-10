@@ -55,6 +55,10 @@ def test_policy_requires_confirmation_for_sensitive_fill():
     assert decision.requires_confirmation is True
     assert decision.confirmation is not None
     assert "Требуется подтверждение" in decision.confirmation.message_ru
+    assert "Действие:" in decision.confirmation.message_ru
+    assert "Почему нужна пауза:" in decision.confirmation.message_ru
+    assert "Если подтвердить" in decision.confirmation.message_ru
+    assert "Чтобы отменить" in decision.confirmation.message_ru
     assert decision.confirmation.redacted_arguments["value"] == "[REDACTED]"
 
 

@@ -1201,7 +1201,16 @@ def _user_message_ru_for_result(result: AgentTaskResult) -> str:
     if result.termination_reason is TaskTerminationReason.CANCELLED:
         return "Задача отменена пользователем."
     if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
-        return result.message
+        if result.confirmation_request is not None:
+            message_ru = result.confirmation_request.get("message_ru")
+            if isinstance(message_ru, str) and message_ru.strip():
+                return message_ru
+        return (
+            "Нужно подтверждение пользователя перед продолжением. Агент остановился и "
+            "не будет выполнять следующее действие автоматически. Если вы хотите "
+            "отменить действие, не подтверждайте его; можно уточнить задачу и "
+            "запустить ее заново."
+        )
     if result.termination_reason is TaskTerminationReason.REASONING_FAILURE:
         return (
             "Не удалось получить надежное решение от LLM-провайдера. "

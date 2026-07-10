@@ -389,11 +389,16 @@ class DeterministicSecurityPolicy:
         context: SecurityEvaluationContext,
     ) -> SecurityConfirmationRequest:
         confirmation_id = f"confirm_{self._decision_index + 1}"
+        pause_reason = _confirmation_pause_reason(classification)
         message = (
-            "Требуется подтверждение: "
-            f"{classification.action}. "
-            f"Ожидаемое последствие: {classification.expected_consequence} "
-            "Подтвердите действие явно, если хотите продолжить."
+            "Требуется подтверждение. "
+            f"Действие: {classification.action}. "
+            f"Почему нужна пауза: {pause_reason} "
+            "Если подтвердить, агент выполнит только это действие один раз и затем снова "
+            "вернется к обычным проверкам безопасности. "
+            f"Возможное последствие: {classification.expected_consequence} "
+            "Чтобы отменить, не подтверждайте действие; можно остановить задачу или "
+            "запустить ее заново с более безопасной формулировкой."
         )
         return SecurityConfirmationRequest(
             confirmation_id=confirmation_id,
@@ -605,6 +610,18 @@ def _decision_reason(
     if allowed:
         return "Action is classified as safe by deterministic security policy."
     return "Action requires explicit user confirmation before execution."
+
+
+def _confirmation_pause_reason(classification: ActionClassification) -> str:
+    if classification.risk is ActionRisk.DESTRUCTIVE:
+        return "действие может удалить, отменить или переместить данные пользователя."
+    if classification.risk is ActionRisk.EXTERNAL_SIDE_EFFECT:
+        return "действие может отправить данные во внешний сервис или изменить состояние сайта."
+    if classification.risk is ActionRisk.SENSITIVE:
+        return "действие может затронуть личные данные, настройки или содержимое формы."
+    if classification.uncertain:
+        return "не удалось надежно исключить внешний эффект или изменение данных."
+    return "для этого действия требуется дополнительная проверка перед продолжением."
 
 
 def _outcome_for_decision(decision: SecurityDecision) -> str:

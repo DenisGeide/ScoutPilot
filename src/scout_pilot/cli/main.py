@@ -22,15 +22,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Показать внутренние structured logs уровня INFO.",
+        help="Показать внутренние структурированные логи уровня INFO.",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Показать подробные внутренние structured logs уровня DEBUG.",
+        help="Показать подробные внутренние структурированные логи уровня DEBUG.",
     )
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("status", help="Показать состояние текущего этапа.")
+    subparsers.add_parser("status", help="Показать готовность проекта и доступные команды.")
 
     run_parser = subparsers.add_parser(
         "run",
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--live",
         action="store_true",
-        help="Запросить live-режим. Пока он вернет понятную ошибку и предложит dry-run.",
+        help="Запросить режим с реальными действиями. Сейчас он остановится и предложит безопасный dry-run.",
     )
     run_parser.add_argument("--report-path", help="Куда сохранить JSON-отчет.")
     run_parser.add_argument("--replay-path", help="Куда сохранить JSON replay.")
@@ -70,11 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     interactive_parser.add_argument(
         "--live",
         action="store_true",
-        help="Запросить live-режим. Пока он вернет понятную ошибку и предложит dry-run.",
+        help="Запросить режим с реальными действиями. Сейчас он остановится и предложит безопасный dry-run.",
     )
     interactive_parser.add_argument(
         "--report-dir",
-        help="Папка для report/replay артефактов. По умолчанию reports/tmp.",
+        help="Папка для отчетов и replay-файлов. По умолчанию reports/tmp.",
     )
     interactive_parser.add_argument(
         "--dashboard",
@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     interview_parser = subparsers.add_parser(
         "interview-demo",
-        help="Запустить локальное interview demo на тестовых страницах.",
+        help="Запустить локальное демо для интервью на тестовых страницах.",
     )
     interview_parser.add_argument(
         "--query",
@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     interview_parser.add_argument(
         "--profile-dir",
-        help="Persistent browser profile для демо. По умолчанию .browser-profiles/interview-demo.",
+        help="Постоянный профиль браузера для демо. По умолчанию .browser-profiles/interview-demo.",
     )
     interview_parser.add_argument(
         "--report-path",
@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     interview_parser.add_argument(
         "--headless",
         action="store_true",
-        help="Запустить локальное demo без видимого окна.",
+        help="Запустить локальное демо без видимого окна.",
     )
     interview_parser.add_argument(
         "--headed",
@@ -204,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--slow-mo-ms",
         type=int,
         default=80,
-        help="Небольшая задержка browser actions для записи видео.",
+        help="Небольшая задержка действий браузера для записи видео.",
     )
     interview_parser.add_argument(
         "--wait-after-search-ms",
@@ -247,16 +247,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _print_status(config: AppConfig) -> None:
     print("Scout Pilot: проект установлен, основные слои доступны.")
     print(
-        "Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, "
-        "Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution "
-        "Intelligence, Context Budgeting, Security Policy, Universal Semantic Navigation "
-        "и demo/reporting слой подключены."
+        "Подключены Browser Engine, Semantic Observation Engine, Tool Runtime, "
+        "LLM Provider Layer, Planning Engine, Memory, Runtime, Context Budgeting, "
+        "Security Policy, Universal Semantic Navigation и слой demo/reporting."
     )
     print(
         "Демо поиска вакансий запускается командой demo-vacancy-search с URL, который "
-        "передает пользователь. Live LLM-вызовы из CLI пока не включены."
+        "передает пользователь. Live LLM-вызовы из обычного CLI пока не включены."
     )
-    print("Локальное interview demo доступно через scout-pilot interview-demo.")
+    print("Локальное демо для интервью доступно через scout-pilot interview-demo.")
     print("Одну задачу можно запустить через scout-pilot run \"текст задачи\" --dry-run.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
@@ -285,7 +284,10 @@ async def _run_task(args: argparse.Namespace) -> int:
     result = await run_cli_task(settings, progress=print)
     if result.success:
         return 0
-    print("Что можно сделать дальше: запустите с --dry-run или используйте demo-vacancy-search.")
+    print(
+        "Что можно сделать дальше: повторите команду с --dry-run или запустите "
+        "браузерную демонстрацию через interview-demo / demo-vacancy-search."
+    )
     return 1
 
 
@@ -345,7 +347,7 @@ async def _run_browser_smoke(args: argparse.Namespace) -> int:
         if args.url:
             result = await engine.navigate_to(args.url)
             if not result.success:
-                print(f"Не удалось открыть страницу: {result.message}")
+                print(f"Не удалось открыть страницу: {_browser_action_message_ru(result.error_code)}")
                 return 1
             print(f"Страница открыта: {result.title or result.url or args.url}")
         await asyncio.sleep(max(args.hold_seconds, 0))
@@ -411,7 +413,7 @@ async def _run_vacancy_demo(args: argparse.Namespace) -> int:
     print(result.message_ru)
     print(f"Отчет сохранен: {result.report_path}")
     if result.replay_path is not None:
-        print(f"Replay сохранен: {result.replay_path}")
+        print(f"Replay-файл сохранен: {result.replay_path}")
     if result.success:
         return 0
     if result.stop_reason == "confirmation_required":
@@ -452,13 +454,25 @@ async def _run_interview_demo(args: argparse.Namespace) -> int:
     result = await run_local_interview_demo(config, settings, progress=print)
     print(result.message_ru)
     print(f"Отчет сохранен: {result.report_path}")
-    print(f"Replay сохранен: {result.replay_path}")
+    print(f"Replay-файл сохранен: {result.replay_path}")
     print(f"Прочитано страниц: {result.notes_count}. Пауз безопасности: {result.security_pause_count}.")
     if result.success:
-        print("Локальное interview demo завершено. Реальные отклики и сообщения не отправлялись.")
+        print("Локальное демо для интервью завершено. Реальные отклики и сообщения не отправлялись.")
         return 0
     print("Демо остановилось. Проверьте отчет и replay, чтобы увидеть причину.")
     return 1
+
+
+def _browser_action_message_ru(error_code: str | None) -> str:
+    if error_code and error_code.startswith("http_status_"):
+        status = error_code.removeprefix("http_status_")
+        return f"сервер ответил ошибкой HTTP {status}."
+    return {
+        "invalid_url": "URL пустой или использует неподдерживаемую схему.",
+        "browser_not_started": "браузер не был запущен.",
+        "navigation_timeout": "страница не загрузилась за отведенное время.",
+        "navigation_error": "браузер не смог завершить переход.",
+    }.get(error_code or "", "подробности записаны во внутренний результат браузерного слоя.")
 
 
 def _configure_logging(*, verbose: bool, debug: bool) -> None:
