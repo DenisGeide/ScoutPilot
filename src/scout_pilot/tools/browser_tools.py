@@ -39,6 +39,8 @@ RETRYABLE_BROWSER_CODES = {
     "wait_error",
     "press_key_error",
     "semantic_target_not_found",
+    "semantic_element_stale",
+    "browser_closed",
 }
 NON_RETRYABLE_BROWSER_CODES = {
     "invalid_url",
@@ -706,6 +708,9 @@ def _is_retryable_browser_error(error_code: str | None) -> bool:
         return False
     if error_code in RETRYABLE_BROWSER_CODES:
         return True
+    if error_code and error_code.startswith("http_status_"):
+        status_text = error_code.removeprefix("http_status_")
+        return status_text.startswith("5")
     return bool(error_code and (error_code.endswith("_timeout") or error_code.endswith("_error")))
 
 

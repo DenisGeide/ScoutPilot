@@ -118,6 +118,56 @@ def test_pre_execution_hook_blocks_before_browser_is_touched():
     assert browser.actions == []
 
 
+def test_pre_execution_hook_exception_is_structured_without_browser_action():
+    browser = FakeBrowser()
+
+    def hook(request, tool, arguments):
+        raise RuntimeError("hook failed")
+
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(browser=browser),
+        pre_execution_hook=hook,
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(
+                name="browser.navigate",
+                arguments={"url": "https://example.test"},
+            )
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.FAILED
+    assert result.failure_kind is ToolFailureKind.INTERNAL
+    assert result.error_code == "pre_execution_hook_error"
+    assert browser.actions == []
+
+
+def test_security_policy_exception_blocks_before_browser_action():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(browser=browser),
+        security_policy=FailingSecurityPolicy(),
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(
+                name="browser.navigate",
+                arguments={"url": "https://example.test"},
+            )
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.BLOCKED
+    assert result.failure_kind is ToolFailureKind.SECURITY
+    assert result.error_code == "security_policy_error"
+    assert browser.actions == []
+
+
 def test_sensitive_fill_pauses_then_executes_after_explicit_confirmation():
     browser = FakeBrowser()
     runtime = DefaultToolRuntime(create_browser_tool_registry(), ToolContext(browser=browser))
@@ -317,6 +367,11 @@ class FakeObservationEngine:
             summary="Synthetic observation.",
             interactive_elements=elements,
         )
+
+
+class FailingSecurityPolicy:
+    def evaluate(self, request, context):
+        raise RuntimeError("policy failed")
 
 
 @dataclass(frozen=True)

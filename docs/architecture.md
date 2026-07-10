@@ -77,6 +77,14 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 - Retryable tool failures переводят runtime в `retrying` и могут вызвать `PlanningEngine.revise_plan`.
 - Повторные no-op observations и повторяющиеся tool failures превращаются в reflection events и bounded memory summaries, чтобы runtime мог перестроить план без website-specific логики.
 
+Операционные отказы обрабатываются как явные состояния:
+
+- Browser Engine возвращает structured failures для таймаутов, HTTP 4xx/5xx навигации, закрытого браузера, stale semantic element и неожиданных dialogs; закрытие контекста не должно мешать попытке остановить Playwright.
+- Tool Runtime блокирует выполнение, если pre-execution hook или Security Policy падают до `tool.execute()`. Браузер в этих случаях не трогается.
+- Reasoning Engine нормализует исключения провайдера, пустые ответы, неизвестные tools, не-object tool arguments и ответы, оборванные по лимиту токенов.
+- Runtime добавляет русское `message_ru` в terminal details и продолжает вести bounded memory summaries; сбой записи memory логируется, но не превращает сам по себе безопасную остановку в crash.
+- Reports и replay получают только sanitized events: raw HTML, DOM dumps, browser profiles, cookies, tokens, private paths и чувствительные поля туда не попадают.
+
 ## Будущие этапы
 
 1. Полноценный автономный CLI-режим может использовать уже готовые semantic tools, security confirmations и безопасный report/replay формат.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -33,12 +35,16 @@ from scout_pilot.semantic_ids import (
 
 
 SUPPORTED_URL_SCHEMES = {"http", "https", "file", "about"}
+MAX_BROWSER_WAIT_MS = 60_000
 SEMANTIC_INTERACTIVE_SELECTOR = (
     "a[href],button,input,textarea,select,summary,"
     "[role='button'],[role='link'],[role='checkbox'],[role='radio'],"
     "[role='textbox'],[role='searchbox'],[role='combobox'],[role='menuitem'],[role='tab'],"
     "[tabindex]:not([tabindex='-1']),[contenteditable='true']"
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class PlaywrightBrowserEngine:
@@ -51,6 +57,7 @@ class PlaywrightBrowserEngine:
         self._page: Any | None = None
         self._session: BrowserSessionInfo | None = None
         self._last_navigation_error: str | None = None
+        self._recent_dialogs: list[BrowserDialogSnapshot] = []
 
     async def start(self) -> BrowserSessionInfo:
         """Start a persistent browser context and return public session metadata."""
@@ -75,14 +82,16 @@ class PlaywrightBrowserEngine:
             self._context.set_default_navigation_timeout(
                 self._settings.navigation_timeout_ms
             )
+            self._context.on("page", self._install_dialog_handler)
             self._page = (
                 self._context.pages[0]
                 if self._context.pages
                 else await self._context.new_page()
             )
+            self._install_dialog_handler(self._page)
             self._session = BrowserSessionInfo.create(self._settings)
             return self._session
-        except PlaywrightError as exc:
+        except Exception as exc:
             await self.stop()
             raise BrowserEngineError(f"Failed to start browser: {exc}") from exc
 
@@ -96,11 +105,24 @@ class PlaywrightBrowserEngine:
         self._playwright = None
         self._session = None
         self._last_navigation_error = None
+        self._recent_dialogs = []
 
         if context is not None:
-            await context.close()
+            try:
+                await context.close()
+            except Exception as exc:  # pragma: no cover - defensive cleanup boundary
+                logger.warning(
+                    "browser_context_close_failed",
+                    extra={"event": "browser_context_close_failed", "error": str(exc)},
+                )
         if playwright is not None:
-            await playwright.stop()
+            try:
+                await playwright.stop()
+            except Exception as exc:  # pragma: no cover - defensive cleanup boundary
+                logger.warning(
+                    "playwright_stop_failed",
+                    extra={"event": "playwright_stop_failed", "error": str(exc)},
+                )
 
     async def navigate_to(self, url: str) -> BrowserActionResult:
         """Navigate to a user-provided or discovered URL."""
@@ -119,11 +141,14 @@ class PlaywrightBrowserEngine:
             return _not_started_result("navigate_to")
 
         try:
-            await page.goto(
+            response = await page.goto(
                 url,
                 wait_until="domcontentloaded",
                 timeout=self._settings.navigation_timeout_ms,
             )
+            http_failure = await self._http_status_failure("navigate_to", response)
+            if http_failure is not None:
+                return http_failure
             return await self._successful_action("navigate_to", "Navigation completed.")
         except PlaywrightTimeoutError as exc:
             self._last_navigation_error = "navigation_timeout"
@@ -140,10 +165,13 @@ class PlaywrightBrowserEngine:
             return _not_started_result("reload")
 
         try:
-            await page.reload(
+            response = await page.reload(
                 wait_until="domcontentloaded",
                 timeout=self._settings.navigation_timeout_ms,
             )
+            http_failure = await self._http_status_failure("reload", response)
+            if http_failure is not None:
+                return http_failure
             return await self._successful_action("reload", "Page reloaded.")
         except PlaywrightTimeoutError as exc:
             self._last_navigation_error = "reload_timeout"
@@ -160,10 +188,13 @@ class PlaywrightBrowserEngine:
             return _not_started_result("go_back")
 
         try:
-            await page.go_back(
+            response = await page.go_back(
                 wait_until="domcontentloaded",
                 timeout=self._settings.navigation_timeout_ms,
             )
+            http_failure = await self._http_status_failure("go_back", response)
+            if http_failure is not None:
+                return http_failure
             return await self._successful_action("go_back", "Back navigation completed.")
         except PlaywrightTimeoutError as exc:
             self._last_navigation_error = "back_timeout"
@@ -180,10 +211,13 @@ class PlaywrightBrowserEngine:
             return _not_started_result("go_forward")
 
         try:
-            await page.go_forward(
+            response = await page.go_forward(
                 wait_until="domcontentloaded",
                 timeout=self._settings.navigation_timeout_ms,
             )
+            http_failure = await self._http_status_failure("go_forward", response)
+            if http_failure is not None:
+                return http_failure
             return await self._successful_action("go_forward", "Forward navigation completed.")
         except PlaywrightTimeoutError as exc:
             self._last_navigation_error = "forward_timeout"
@@ -277,7 +311,11 @@ class PlaywrightBrowserEngine:
         except PlaywrightTimeoutError as exc:
             return await self._failed_action("click_by_semantic_id", "click_timeout", exc)
         except PlaywrightError as exc:
-            return await self._failed_action("click_by_semantic_id", "click_error", exc)
+            return await self._failed_action(
+                "click_by_semantic_id",
+                _playwright_action_error_code("click_error", exc),
+                exc,
+            )
 
     async def fill_by_semantic_id(self, element_id: str, value: str) -> BrowserActionResult:
         """Fill a visible form field by its generated semantic ID."""
@@ -337,7 +375,11 @@ class PlaywrightBrowserEngine:
         except PlaywrightTimeoutError as exc:
             return await self._failed_action("fill_by_semantic_id", "fill_timeout", exc)
         except PlaywrightError as exc:
-            return await self._failed_action("fill_by_semantic_id", "fill_error", exc)
+            return await self._failed_action(
+                "fill_by_semantic_id",
+                _playwright_action_error_code("fill_error", exc),
+                exc,
+            )
 
     async def press_key(self, key: str) -> BrowserActionResult:
         """Press a keyboard key on the current page."""
@@ -370,6 +412,13 @@ class PlaywrightBrowserEngine:
                 action="wait_for_timeout",
                 success=False,
                 message="Wait duration cannot be negative.",
+                error_code="invalid_wait_duration",
+            )
+        if milliseconds > MAX_BROWSER_WAIT_MS:
+            return BrowserActionResult(
+                action="wait_for_timeout",
+                success=False,
+                message="Wait duration exceeds the maximum allowed browser wait.",
                 error_code="invalid_wait_duration",
             )
 
@@ -406,6 +455,7 @@ class PlaywrightBrowserEngine:
                 },
             )
             snapshot = _snapshot_from_raw(raw_snapshot)
+            snapshot = self._snapshot_with_runtime_signals(snapshot)
             if self._last_navigation_error is None:
                 return snapshot
             return BrowserPageSnapshot(
@@ -431,7 +481,14 @@ class PlaywrightBrowserEngine:
                 origin=_origin_from_url(state.url),
                 load_state="unknown",
                 is_visible=False,
-                issues=("observation_error",),
+                issues=tuple(
+                    dict.fromkeys(
+                        (
+                            "observation_error",
+                            *((self._last_navigation_error,) if self._last_navigation_error else ()),
+                        )
+                    )
+                ),
             )
 
     async def _find_element_by_semantic_id(
@@ -488,6 +545,87 @@ class PlaywrightBrowserEngine:
             error_code=error_code,
         )
 
+    async def _http_status_failure(
+        self,
+        action: str,
+        response: Any | None,
+    ) -> BrowserActionResult | None:
+        if response is None:
+            return None
+        status = getattr(response, "status", None)
+        if not isinstance(status, int) or status < 400:
+            return None
+
+        error_code = f"http_status_{status}"
+        self._last_navigation_error = error_code
+        state = await self.current_state()
+        return BrowserActionResult(
+            action=action,
+            success=False,
+            message=f"Navigation completed with HTTP status {status}.",
+            url=state.url,
+            title=state.title,
+            error_code=error_code,
+        )
+
+    def _install_dialog_handler(self, page: Any) -> None:
+        page.on(
+            "dialog",
+            lambda dialog: asyncio.create_task(self._handle_unexpected_dialog(dialog)),
+        )
+
+    async def _handle_unexpected_dialog(self, dialog: Any) -> None:
+        dialog_type = str(getattr(dialog, "type", "dialog") or "dialog")
+        dialog_message = truncate_optional_semantic_text(
+            str(getattr(dialog, "message", "") or ""),
+            500,
+        )
+        self._recent_dialogs.append(
+            BrowserDialogSnapshot(
+                role="dialog",
+                title=f"Unexpected {dialog_type} dialog",
+                text=dialog_message or "",
+                location=None,
+            )
+        )
+        self._recent_dialogs = self._recent_dialogs[-5:]
+        try:
+            await dialog.dismiss()
+        except PlaywrightError as exc:  # pragma: no cover - depends on browser timing
+            logger.info(
+                "unexpected_dialog_dismiss_failed",
+                extra={
+                    "event": "unexpected_dialog_dismiss_failed",
+                    "dialog_type": dialog_type,
+                    "error": str(exc),
+                },
+            )
+
+    def _snapshot_with_runtime_signals(
+        self,
+        snapshot: BrowserPageSnapshot,
+    ) -> BrowserPageSnapshot:
+        if not self._recent_dialogs:
+            return snapshot
+
+        dialogs = tuple(self._recent_dialogs)
+        self._recent_dialogs = []
+        return BrowserPageSnapshot(
+            url=snapshot.url,
+            title=snapshot.title,
+            origin=snapshot.origin,
+            load_state=snapshot.load_state,
+            is_visible=snapshot.is_visible,
+            viewport_width=snapshot.viewport_width,
+            viewport_height=snapshot.viewport_height,
+            sections=snapshot.sections,
+            interactive_elements=snapshot.interactive_elements,
+            form_fields=snapshot.form_fields,
+            focused_element=snapshot.focused_element,
+            dialogs=tuple(dict.fromkeys((*dialogs, *snapshot.dialogs))),
+            issues=tuple(dict.fromkeys((*snapshot.issues, "unexpected_dialog"))),
+        )
+
     def _default_screenshot_path(self) -> Path:
         session_id = self._session.session_id if self._session else "no-session"
         return self._settings.screenshots_dir / f"{session_id}.png"
@@ -536,6 +674,15 @@ def _is_text_fillable(input_type: str | None, role: str | None) -> bool:
         "textarea",
         "contenteditable",
     }
+
+
+def _playwright_action_error_code(default: str, exc: PlaywrightError) -> str:
+    message = str(exc).casefold()
+    if "not attached" in message or "detached" in message:
+        return "semantic_element_stale"
+    if "target page" in message and "closed" in message:
+        return "browser_closed"
+    return default
 
 
 def _snapshot_from_raw(raw: dict[str, Any]) -> BrowserPageSnapshot:

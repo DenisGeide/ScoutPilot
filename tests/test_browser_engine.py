@@ -79,6 +79,73 @@ def test_browser_actions_before_start_are_structured_failures(tmp_path):
     asyncio.run(scenario())
 
 
+def test_browser_stop_attempts_playwright_cleanup_after_context_close_error(tmp_path):
+    settings = BrowserEngineConfig(user_data_dir=tmp_path / "profile", headless=True)
+    engine = PlaywrightBrowserEngine(settings)
+    playwright = FakePlaywright()
+    engine._context = BrokenContext()
+    engine._playwright = playwright
+
+    async def scenario():
+        await engine.stop()
+        state = await engine.current_state()
+        return state
+
+    state = asyncio.run(scenario())
+
+    assert playwright.stopped is True
+    assert state.is_started is False
+
+
+def test_browser_dismisses_unexpected_dialog_and_reports_signal(tmp_path):
+    page_path = tmp_path / "dialog.html"
+    page_path.write_text(
+        """
+        <!doctype html>
+        <title>Dialog Page</title>
+        <main>
+          <button aria-label="Show dialog" onclick="alert('Stop here')">Show</button>
+        </main>
+        """,
+        encoding="utf-8",
+    )
+    browser = PlaywrightBrowserEngine(
+        BrowserEngineConfig(
+            user_data_dir=tmp_path / "profile",
+            headless=True,
+            default_timeout_ms=10000,
+            navigation_timeout_ms=10000,
+            screenshots_dir=tmp_path / "screenshots",
+        )
+    )
+    observer = SemanticObservationEngine(browser)
+
+    async def scenario():
+        await browser.start()
+        try:
+            result = await browser.navigate_to(page_path.resolve().as_uri())
+            assert result.success is True
+            observation = await observer.observe()
+            button = next(
+                item
+                for item in observation.interactive_elements
+                if item.accessible_name == "Show dialog"
+            )
+
+            click_result = await browser.click_by_semantic_id(button.element_id)
+            assert click_result.success is True
+            await browser.wait_for_timeout(50)
+            snapshot = await browser.capture_semantic_snapshot()
+            return snapshot
+        finally:
+            await browser.stop()
+
+    snapshot = asyncio.run(scenario())
+
+    assert "unexpected_dialog" in snapshot.issues
+    assert any("Stop here" in dialog.text for dialog in snapshot.dialogs)
+
+
 def test_browser_engine_public_api_does_not_expose_raw_playwright_objects():
     public_names = {
         name
@@ -148,3 +215,16 @@ def test_browser_clicks_and_fills_by_semantic_ids(tmp_path):
             await browser.stop()
 
     asyncio.run(scenario())
+
+
+class BrokenContext:
+    async def close(self):
+        raise RuntimeError("context close failed")
+
+
+class FakePlaywright:
+    def __init__(self):
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True

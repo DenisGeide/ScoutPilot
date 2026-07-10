@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from scout_pilot.context import (
@@ -12,13 +14,19 @@ from scout_pilot.context import (
 )
 from scout_pilot.llm.provider import LlmProvider
 from scout_pilot.llm.types import (
+    LlmErrorCode,
+    LlmFinishReason,
     LlmMessage,
     LlmMessageRole,
+    LlmProviderError,
     LlmProviderRequest,
     ReasoningContext,
     ReasoningResult,
 )
 from scout_pilot.models import ToolRequest
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,7 +88,33 @@ class ReasoningEngine:
             max_output_tokens=self._settings.max_output_tokens,
             timeout_seconds=self._settings.timeout_seconds,
         )
-        result = await self._provider.complete(request)
+        try:
+            result = await self._provider.complete(request)
+        except TimeoutError as exc:
+            return ReasoningResult.failure(
+                "LLM provider timed out before returning a structured result.",
+                LlmProviderError(
+                    code=LlmErrorCode.TIMEOUT,
+                    message=str(exc),
+                    retryable=True,
+                ),
+            )
+        except Exception as exc:
+            logger.info(
+                "llm_provider_exception",
+                extra={
+                    "event": "llm_provider_exception",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ReasoningResult.failure(
+                "LLM provider raised an unexpected error before returning a structured result.",
+                LlmProviderError(
+                    code=LlmErrorCode.UNKNOWN,
+                    message=str(exc),
+                    retryable=False,
+                ),
+            )
         if not result.success:
             return ReasoningResult.failure(
                 result.error.message if result.error else "LLM provider failed.",
@@ -88,14 +122,27 @@ class ReasoningEngine:
             )
         if result.response is None:
             return ReasoningResult.failure("LLM provider returned no response.")
+        if result.response.finish_reason is LlmFinishReason.LENGTH:
+            return ReasoningResult.failure(
+                "LLM provider stopped because the output token limit was reached.",
+                LlmProviderError(
+                    code=LlmErrorCode.MALFORMED_RESPONSE,
+                    message="Provider response ended at max output tokens.",
+                    retryable=True,
+                ),
+            )
 
         if result.response.tool_calls:
             tool_call = result.response.tool_calls[0]
+            if not tool_call.name.strip():
+                return ReasoningResult.failure("Model selected an empty tool name.")
             available_names = {schema.name for schema in context.available_tools}
             if available_names and tool_call.name not in available_names:
                 return ReasoningResult.failure(f"Model selected unknown tool: {tool_call.name}")
+            if not isinstance(tool_call.arguments, Mapping):
+                return ReasoningResult.failure("Model tool arguments were not an object.")
             return ReasoningResult.tool_selected(
-                ToolRequest(name=tool_call.name, arguments=tool_call.arguments)
+                ToolRequest(name=tool_call.name, arguments=dict(tool_call.arguments))
             )
 
         content = (result.response.content or "").strip()

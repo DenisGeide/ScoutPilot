@@ -130,7 +130,20 @@ class DefaultToolRuntime:
             return result
 
         validated_input = dict(validation.values)
-        decision = await self._run_pre_execution_hook(request, tool, validated_input)
+        try:
+            decision = await self._run_pre_execution_hook(request, tool, validated_input)
+        except Exception as exc:
+            result = _pre_execution_failure_result(
+                request.name,
+                "Pre-execution hook failed before tool execution.",
+                "pre_execution_hook_error",
+                started_at,
+                started,
+                exc,
+            )
+            self._log("pre_execution_hook_failed", request.name, result)
+            self._record_history(request.name, validated_input, tool, result)
+            return result
         if decision.status is not PreExecutionStatus.ALLOW:
             return self._decision_result(
                 request.name,
@@ -141,7 +154,24 @@ class DefaultToolRuntime:
                 started,
             )
 
-        decision = await self._run_security_policy(request, tool, validated_input)
+        try:
+            decision = await self._run_security_policy(request, tool, validated_input)
+        except Exception as exc:
+            result = _result(
+                request.name,
+                ToolExecutionStatus.BLOCKED,
+                False,
+                "Security policy failed before tool execution; action was blocked.",
+                started_at,
+                started,
+                data={"error_type": type(exc).__name__},
+                failure_kind=ToolFailureKind.SECURITY,
+                retryable=False,
+                error_code="security_policy_error",
+            )
+            self._log("security_policy_failed", request.name, result)
+            self._record_history(request.name, validated_input, tool, result)
+            return result
         if decision.status is not PreExecutionStatus.ALLOW:
             return self._decision_result(
                 request.name,
@@ -203,7 +233,9 @@ class DefaultToolRuntime:
             return PreExecutionDecision.allow()
         decision = self._pre_execution_hook(request, tool, validated_input)
         if inspect.isawaitable(decision):
-            return await decision
+            decision = await decision
+        if not isinstance(decision, PreExecutionDecision):
+            raise TypeError("Pre-execution hook must return PreExecutionDecision.")
         return decision
 
     async def _run_security_policy(
@@ -418,6 +450,28 @@ def _result(
         started_at=started_at,
         finished_at=finished_at,
         duration_ms=(perf_counter() - started) * 1000,
+    )
+
+
+def _pre_execution_failure_result(
+    tool_name: str,
+    message: str,
+    error_code: str,
+    started_at: datetime,
+    started: float,
+    exc: Exception,
+) -> ToolExecutionResult:
+    return _result(
+        tool_name,
+        ToolExecutionStatus.FAILED,
+        False,
+        message,
+        started_at,
+        started,
+        data={"error_type": type(exc).__name__},
+        failure_kind=ToolFailureKind.INTERNAL,
+        retryable=False,
+        error_code=error_code,
     )
 
 

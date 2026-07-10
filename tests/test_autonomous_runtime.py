@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
 from scout_pilot.browser.types import BrowserActionResult
 from scout_pilot.llm import (
+    LlmErrorCode,
+    LlmProviderError,
     LlmProviderResponse,
     LlmProviderResult,
     LlmToolCall,
@@ -226,6 +228,37 @@ def test_runtime_stops_when_retryable_failure_reaches_max_failures():
     assert runtime.last_result.success is False
     assert runtime.last_result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED
     assert events[-1].details["termination_reason"] == "max_failures_exceeded"
+
+
+def test_runtime_reports_provider_failure_with_russian_user_message():
+    provider = MockLlmProvider(
+        [
+            LlmProviderResult(
+                success=False,
+                error=LlmProviderError(
+                    code=LlmErrorCode.TIMEOUT,
+                    message="Provider timed out.",
+                    retryable=True,
+                ),
+            )
+        ]
+    )
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([]),
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=2, max_failures=1),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Handle provider failure"))))
+    reasoning_event = next(event for event in events if event.name == "reasoning_completed")
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.termination_reason is TaskTerminationReason.REASONING_FAILURE
+    assert reasoning_event.details["provider_error"]["code"] == "timeout"
+    assert "LLM" in events[-1].details["message_ru"]
+    assert "Проверьте" in events[-1].details["message_ru"]
 
 
 def test_runtime_observes_again_after_noop_without_consuming_failure_limit():

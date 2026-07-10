@@ -256,6 +256,42 @@ def test_reasoning_engine_handles_provider_failure_and_unknown_tool():
     assert "unknown tool" in unknown_tool.message.lower()
 
 
+def test_reasoning_engine_normalizes_provider_exceptions_and_malformed_tool_arguments():
+    schemas = create_browser_tool_registry().schemas()
+    raising_engine = ReasoningEngine(RaisingProvider())
+    malformed_engine = ReasoningEngine(
+        MockLlmProvider(
+            [
+                LlmProviderResult(
+                    success=True,
+                    response=LlmProviderResponse(
+                        tool_calls=(
+                            LlmToolCall(
+                                name="browser.observe",
+                                arguments=["not", "an", "object"],
+                            ),
+                        )
+                    ),
+                )
+            ]
+        )
+    )
+    context = ReasoningContext(
+        user_task="Act",
+        observation=None,
+        available_tools=schemas,
+    )
+
+    provider_exception = asyncio.run(raising_engine.reason(context))
+    malformed_arguments = asyncio.run(malformed_engine.reason(context))
+
+    assert provider_exception.status is ReasoningStatus.FAILURE
+    assert provider_exception.provider_error is not None
+    assert provider_exception.provider_error.code is LlmErrorCode.UNKNOWN
+    assert malformed_arguments.status is ReasoningStatus.FAILURE
+    assert "arguments" in malformed_arguments.message
+
+
 def test_reasoning_engine_budgeting_compresses_oversized_context():
     provider = MockLlmProvider(
         [LlmProviderResult(success=True, response=LlmProviderResponse(content="Done."))]
@@ -383,3 +419,8 @@ class FakeAnthropicClient:
         if self.error is not None:
             raise self.error
         return self.response
+
+
+class RaisingProvider:
+    async def complete(self, request):
+        raise RuntimeError("provider transport failed")

@@ -85,6 +85,16 @@ scout-pilot demo-vacancy-search --start-url https://hh.ru --query "AI Engineer P
 
 Если CLI остановился на подтверждении запуска поиска, продолжайте только для самого поиска и только с явным флагом `--confirm-search-submit`. Отклики, сообщения и отправку заявок в демо не подтверждать.
 
+## Операционные лимиты и отказы
+
+- Браузерные действия должны завершаться structured result, а не необработанным исключением. Таймауты, HTTP 4xx/5xx, stale semantic IDs, закрытый браузер и неожиданные dialogs считаются нормальными failure paths.
+- `PlaywrightBrowserEngine.stop()` должен пытаться закрыть и browser context, и Playwright runtime даже если первый шаг cleanup завершился ошибкой.
+- Tool Runtime обязан остановиться до браузерного действия, если pre-execution hook или Security Policy падают. Такие сбои проверяются тестами и не считаются разрешением на действие.
+- Provider failures в Reasoning Engine должны превращаться в `ReasoningResult.failure` с нормализованным кодом, чтобы runtime мог отдать понятное русское сообщение пользователю и не терял state machine.
+- Ответ модели с неизвестным tool, пустым tool name, не-object arguments или оборванным по output token limit считается malformed и не передается дальше в Tool Runtime.
+- Security pause остается обязательной: после confirmation-required result runtime не продолжает автоматически и разрешает только один exact request после явного подтверждения.
+- Debug logs и report/replay должны помогать расследовать сбой, но не должны включать raw HTML, DOM dumps, cookies, tokens, browser profiles, session data, private paths или sensitive form values.
+
 ## Что считается готовым этапом
 
 - Scope этапа реализован без лишних возможностей.

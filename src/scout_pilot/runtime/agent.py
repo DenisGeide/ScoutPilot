@@ -19,7 +19,7 @@ from scout_pilot.intelligence.types import (
     StepOutcome,
 )
 from scout_pilot.llm.reasoning import ReasoningEngine
-from scout_pilot.llm.types import ReasoningContext, ReasoningStatus
+from scout_pilot.llm.types import LlmProviderError, ReasoningContext, ReasoningStatus
 from scout_pilot.memory.store import MemoryStore
 from scout_pilot.models import (
     ExecutionPlan,
@@ -200,10 +200,7 @@ class AutonomousAgentRuntime:
                         task_id,
                         progress,
                     )
-                    memory_summaries = self._memory.context_summaries(
-                        task_id,
-                        max_items=self._settings.max_memory_summaries,
-                    )
+                    memory_summaries = self._memory_summaries(task_id)
                     plan = await self._planning_engine.create_plan(
                         task,
                         observation,
@@ -258,6 +255,9 @@ class AutonomousAgentRuntime:
                     details={
                         "status": reasoning.status.value,
                         "message": reasoning.message,
+                        "provider_error": _provider_error_details(
+                            reasoning.provider_error
+                        ),
                     },
                 )
 
@@ -573,6 +573,15 @@ class AutonomousAgentRuntime:
             )
             return
         except Exception as exc:
+            logger.exception(
+                "runtime_fatal_error",
+                extra={
+                    "event": "runtime_fatal_error",
+                    "task_id": task_id,
+                    "state": self._state.value,
+                    "error_type": type(exc).__name__,
+                },
+            )
             progress = _progress(
                 progress.iteration,
                 self._settings,
@@ -618,10 +627,7 @@ class AutonomousAgentRuntime:
             ReasoningContext(
                 user_task=task.text,
                 observation=observation,
-                memory_summaries=self._memory.context_summaries(
-                    task_id,
-                    max_items=self._settings.max_memory_summaries,
-                ),
+                memory_summaries=self._memory_summaries(task_id),
                 available_tools=self._tool_schemas,
                 security_constraints=self._security_constraints,
                 confirmation_constraints=self._confirmation_constraints,
@@ -685,10 +691,7 @@ class AutonomousAgentRuntime:
     ) -> tuple[ExecutionPlan | None, tuple[RuntimeEvent, ...]]:
         if plan is None:
             return plan, ()
-        memory_summaries = self._memory.context_summaries(
-            task_id,
-            max_items=self._settings.max_memory_summaries,
-        )
+        memory_summaries = self._memory_summaries(task_id)
         revised_plan = await self._planning_engine.revise_plan(
             plan,
             observation,
@@ -933,7 +936,7 @@ class AutonomousAgentRuntime:
         )
 
     async def _remember_task_goal(self, task_id: str, task: UserTask) -> None:
-        await self._memory.update(
+        await self._update_memory(
             MemoryRecord(
                 key="user_goal",
                 value={"goal": task.text},
@@ -953,7 +956,7 @@ class AutonomousAgentRuntime:
         *,
         phase: str,
     ) -> None:
-        await self._memory.update(
+        await self._update_memory(
             MemoryRecord(
                 key=f"observation_{iteration}_{phase}",
                 value={
@@ -975,7 +978,7 @@ class AutonomousAgentRuntime:
         iteration: int,
         evaluation: StepEvaluation,
     ) -> None:
-        await self._memory.update(
+        await self._update_memory(
             MemoryRecord(
                 key=f"reflection_{iteration}",
                 value={
@@ -997,7 +1000,7 @@ class AutonomousAgentRuntime:
         )
 
     async def _remember_plan(self, task_id: str, plan: ExecutionPlan) -> None:
-        await self._memory.update(
+        await self._update_memory(
             MemoryRecord(
                 key="current_plan",
                 value={
@@ -1024,7 +1027,7 @@ class AutonomousAgentRuntime:
         )
 
     async def _remember_event(self, task_id: str, key: str, event: str) -> None:
-        await self._memory.update(
+        await self._update_memory(
             MemoryRecord(
                 key=key,
                 value={"event": event},
@@ -1035,6 +1038,39 @@ class AutonomousAgentRuntime:
                 source="runtime",
             )
         )
+
+    async def _update_memory(self, record: MemoryRecord) -> None:
+        try:
+            await self._memory.update(record)
+        except Exception as exc:
+            logger.warning(
+                "memory_update_failed",
+                extra={
+                    "event": "memory_update_failed",
+                    "record_key": record.key,
+                    "record_kind": record.kind.value,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+    def _memory_summaries(self, task_id: str) -> tuple[str, ...]:
+        try:
+            return tuple(
+                self._memory.context_summaries(
+                    task_id,
+                    max_items=self._settings.max_memory_summaries,
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "memory_summary_failed",
+                extra={
+                    "event": "memory_summary_failed",
+                    "task_id": task_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return ()
 
 
 def _progress(
@@ -1139,6 +1175,7 @@ def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
         "success": result.success,
         "termination_reason": result.termination_reason.value,
         "message": result.message,
+        "message_ru": _user_message_ru_for_result(result),
         "answer": result.answer,
         "iterations": result.iterations,
         "failures": result.failures,
@@ -1146,6 +1183,37 @@ def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
     if result.confirmation_request is not None:
         details["confirmation_request"] = dict(result.confirmation_request)
     return details
+
+
+def _provider_error_details(error: LlmProviderError | None) -> Mapping[str, object] | None:
+    if error is None:
+        return None
+    return {
+        "code": error.code.value,
+        "retryable": error.retryable,
+        "message": error.message,
+    }
+
+
+def _user_message_ru_for_result(result: AgentTaskResult) -> str:
+    if result.termination_reason is TaskTerminationReason.ANSWERED:
+        return "Задача завершена."
+    if result.termination_reason is TaskTerminationReason.CANCELLED:
+        return "Задача отменена пользователем."
+    if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
+        return result.message
+    if result.termination_reason is TaskTerminationReason.REASONING_FAILURE:
+        return (
+            "Не удалось получить надежное решение от LLM-провайдера. "
+            "Проверьте настройки провайдера, ключи доступа и сеть, затем повторите задачу."
+        )
+    if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
+        return "Достигнут лимит итераций. Попробуйте сузить задачу или начать с более конкретной страницы."
+    if result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED:
+        return "Достигнут лимит повторных ошибок. Агент остановился, чтобы не выполнять одно и то же действие без пользы."
+    if result.termination_reason is TaskTerminationReason.TOOL_FAILURE:
+        return "Инструмент завершился ошибкой. Проверьте текущую страницу и повторите задачу после уточнения."
+    return "Задача остановлена из-за внутренней ошибки. Проверьте debug-логи и повторите после исправления причины."
 
 
 def _evaluation_details(evaluation: StepEvaluation) -> Mapping[str, object]:
