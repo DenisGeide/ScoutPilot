@@ -1,19 +1,14 @@
-"""LLM provider protocol definitions."""
+"""Provider-neutral LLM provider protocol definitions."""
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Protocol
 
-from scout_pilot.models import PageObservation, ToolRequest
+from scout_pilot.llm.types import LlmProviderRequest, LlmProviderResult
 
 
 class LlmProvider(Protocol):
-    """Provider-neutral interface for future OpenAI and Anthropic adapters."""
+    """Provider-neutral interface implemented by concrete LLM adapters."""
 
-    async def propose_next_action(
-        self,
-        task: str,
-        observation: PageObservation,
-        available_tools: Sequence[str],
-    ) -> ToolRequest:
-        """Return the next proposed tool request without executing it."""
+    async def complete(self, request: LlmProviderRequest) -> LlmProviderResult:
+        """Return a provider-neutral completion result."""

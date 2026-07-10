@@ -9,7 +9,7 @@ Scout Pilot строится как набор независимых слоев
 | Browser Engine | `scout_pilot.browser` | Управляет видимым браузером, сессиями, навигацией и диагностическими скриншотами. Playwright изолирован здесь. |
 | Semantic Observation Engine | `scout_pilot.observation` | Преобразует контролируемый Browser Engine snapshot в компактное семантическое наблюдение без полного HTML и значений чувствительных полей. |
 | Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через provider-neutral схемы, ведет history и structured logs. |
-| LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом. |
+| LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом, содержит provider-specific tool schema adapters и Reasoning Engine. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет план выполнения пользовательской задачи. |
 | Hierarchical Memory | `scout_pilot.memory` | Хранит рабочую, задачную и эпизодическую память с учетом приватности. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует цикл агента, состояния и события выполнения. |
@@ -25,13 +25,13 @@ Scout Pilot строится как набор независимых слоев
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
 - Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
 - Tool Runtime имеет pre-execution hook для будущего Security Policy Layer и не содержит provider-specific schema adapters.
-- Провайдеры LLM не должны импортироваться в планировщик, память, безопасность или CLI напрямую.
+- Провайдеры LLM и SDK imports не должны выходить за пределы `scout_pilot.llm`.
+- Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
 
 ## Будущие этапы
 
-1. LLM Provider Layer подключит OpenAI или Anthropic через единый интерфейс и адаптирует нейтральные tool schemas.
-2. Planning Engine начнет формировать шаги поверх observation и tools.
-3. Memory, Context и Intelligence добавят восстановление, сжатие и оценку прогресса.
-4. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
-5. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
+1. Planning Engine начнет формировать шаги поверх observation, Reasoning Engine и tools.
+2. Memory, Context и Intelligence добавят восстановление, сжатие и оценку прогресса.
+3. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
+4. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.

@@ -48,6 +48,8 @@ class AppConfig:
     reports_dir: Path = Path("reports")
     llm_provider: str = "openai"
     llm_model: str = "gpt-4.1-mini"
+    llm_timeout_seconds: float = 30.0
+    llm_max_output_tokens: int = 1200
     require_confirmation: bool = True
     max_context_tokens: int = 12000
     provider_secrets: ProviderSecrets = field(default_factory=ProviderSecrets)
@@ -108,6 +110,14 @@ class AppConfig:
             reports_dir=Path(values.get("SCOUT_PILOT_REPORTS_DIR", "reports")),
             llm_provider=values.get("SCOUT_PILOT_LLM_PROVIDER", "openai"),
             llm_model=values.get("SCOUT_PILOT_LLM_MODEL", "gpt-4.1-mini"),
+            llm_timeout_seconds=_parse_positive_float(
+                values.get("SCOUT_PILOT_LLM_TIMEOUT_SECONDS", "30"),
+                variable_name="SCOUT_PILOT_LLM_TIMEOUT_SECONDS",
+            ),
+            llm_max_output_tokens=_parse_positive_int(
+                values.get("SCOUT_PILOT_LLM_MAX_OUTPUT_TOKENS", "1200"),
+                variable_name="SCOUT_PILOT_LLM_MAX_OUTPUT_TOKENS",
+            ),
             require_confirmation=_parse_bool(
                 values.get("SCOUT_PILOT_REQUIRE_CONFIRMATION", "true")
             ),
@@ -147,6 +157,13 @@ def _parse_bool(value: str) -> bool:
 
 def _parse_positive_int(value: str, variable_name: str) -> int:
     parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{variable_name} must be positive")
+    return parsed
+
+
+def _parse_positive_float(value: str, variable_name: str) -> float:
+    parsed = float(value)
     if parsed <= 0:
         raise ValueError(f"{variable_name} must be positive")
     return parsed
