@@ -22,7 +22,7 @@ python -m pytest
 - Execution Intelligence: no-op, repeated failures, stale elements, replanning.
 - Universal Semantic Navigation на разных локальных тестовых сайтах.
 - HH.ru-like vacancy flow на локальных тестовых страницах.
-- CLI parsing, dry-run report/replay и sanitizer.
+- CLI parsing, dry-run/live report/replay и sanitizer.
 
 ## Локальные smoke-проверки
 
@@ -31,6 +31,7 @@ CLI:
 ```powershell
 scout-pilot status
 scout-pilot run "Проверить страницу" --dry-run --dashboard off
+scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 ```
 
 Browser Engine:

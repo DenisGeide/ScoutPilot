@@ -13,6 +13,7 @@ python -m compileall -q src tests
 python -m pytest -q
 scout-pilot status
 scout-pilot run "Проверить страницу" --dry-run --dashboard off
+scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 scout-pilot browser-smoke --headless --hold-seconds 0
 scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 ```
@@ -67,7 +68,7 @@ git push -u origin main
 
 - готов для клонирования, чтения, локального запуска тестов и interview demo;
 - не заявляет готовность к реальной эксплуатации;
-- обычный `scout-pilot run` остается dry-run;
+- `scout-pilot run` по умолчанию остается dry-run, а `scout-pilot run --live` запускает основной runtime loop;
 - live HH.ru smoke выполняется вручную и может остановиться на CAPTCHA, login, регионе или измененной странице;
 - live LLM provider calls не входят в автоматические тесты.
 

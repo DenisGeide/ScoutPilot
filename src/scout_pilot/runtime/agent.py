@@ -347,6 +347,21 @@ class AutonomousAgentRuntime:
                     continue
 
                 selected_tool = reasoning.selected_tool
+                yield self._event(
+                    "tool_selected",
+                    RuntimeStatus.RUNNING,
+                    task_id=task_id,
+                    progress=progress,
+                    message_key="runtime.tool.selected",
+                    details={
+                        "selected_tool": selected_tool.name,
+                        "selected_tool_arguments": _redact_tool_arguments(
+                            selected_tool,
+                            self._tool_schemas,
+                        ),
+                        "next_action": "execute_tool",
+                    },
+                )
                 yield self._transition(
                     AgentState.EXECUTING,
                     f"Execute selected tool {selected_tool.name}.",
@@ -1247,3 +1262,24 @@ def _confirmation_from_tool_result(
     if isinstance(confirmation, Mapping):
         return dict(confirmation)
     return None
+
+
+def _redact_tool_arguments(
+    request: ToolRequest,
+    schemas: Sequence[ToolSchema],
+) -> Mapping[str, object]:
+    schema = next((schema for schema in schemas if schema.name == request.name), None)
+    sensitive_fields = (
+        schema.input_schema.sensitive_field_names() if schema is not None else set()
+    )
+    redacted: dict[str, object] = {}
+    for key, value in request.arguments.items():
+        normalized = key.casefold()
+        if key in sensitive_fields or any(
+            hint in normalized
+            for hint in ("password", "token", "secret", "cookie", "api_key", "value")
+        ):
+            redacted[key] = "[REDACTED]"
+        else:
+            redacted[key] = value
+    return redacted

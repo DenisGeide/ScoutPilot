@@ -77,6 +77,45 @@ def test_run_command_accepts_natural_language_task():
     assert args.dashboard == "off"
 
 
+def test_run_live_command_accepts_provider_start_url_and_limits():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "run",
+            "Найди",
+            "страницу",
+            "--live",
+            "--provider",
+            "mock",
+            "--start-url",
+            "https://example.test",
+            "--max-iterations",
+            "3",
+            "--headless",
+            "--dashboard",
+            "verbose",
+        ]
+    )
+
+    assert args.command == "run"
+    assert args.live is True
+    assert args.provider == "mock"
+    assert args.start_url == "https://example.test"
+    assert args.max_iterations == 3
+    assert args.headless is True
+    assert args.dashboard == "verbose"
+
+
+def test_run_live_command_accepts_explicit_headed_flag():
+    parser = build_parser()
+
+    args = parser.parse_args(["run", "Проверить", "--live", "--headed"])
+
+    assert args.live is True
+    assert args.headed is True
+
+
 def test_interactive_command_parses_dry_run_mode():
     parser = build_parser()
 

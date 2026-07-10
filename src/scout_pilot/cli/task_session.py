@@ -3,15 +3,33 @@
 from __future__ import annotations
 
 import logging
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from scout_pilot.cli.dashboard import RuntimeDashboard
-from scout_pilot.models import RuntimeEvent, RuntimeStatus
-from scout_pilot.reporting import RuntimeReportArtifacts, RuntimeReportRecorder
+from scout_pilot.config import AppConfig
+from scout_pilot.llm import (
+    DeterministicBrowserMockProvider,
+    LlmProviderConfig,
+    LlmProviderName,
+    ReasoningEngine,
+    ReasoningSettings,
+    create_llm_provider,
+)
+from scout_pilot.models import RuntimeEvent, RuntimeStatus, ToolRequest, UserTask
+from scout_pilot.planning import ProviderPlanningEngine
+from scout_pilot.planning.types import PlanningSettings
+from scout_pilot.reporting import (
+    RuntimeReportArtifacts,
+    RuntimeReportRecorder,
+    sanitize_for_report,
+)
+from scout_pilot.runtime import AutonomousAgentRuntime, RuntimeSettings, TaskTerminationReason
+from scout_pilot.tools.types import ToolExecutionResult, ToolExecutionStatus, ToolSchema
 
 
 logger = logging.getLogger(__name__)
@@ -28,12 +46,20 @@ class CliTaskSettings:
     report_path: Path
     replay_path: Path
     dashboard: str = "compact"
+    start_url: str | None = None
+    provider: str | None = None
+    max_iterations: int = 8
+    headless: bool = False
 
     def __post_init__(self) -> None:
         if not self.task.strip():
             raise ValueError("task cannot be empty")
-        if self.dashboard not in {"compact", "off"}:
-            raise ValueError("dashboard must be 'compact' or 'off'")
+        if self.dashboard not in {"compact", "verbose", "off"}:
+            raise ValueError("dashboard must be 'compact', 'verbose' or 'off'")
+        if self.provider is not None and self.provider not in {"openai", "anthropic", "mock"}:
+            raise ValueError("provider must be 'openai', 'anthropic' or 'mock'")
+        if self.max_iterations <= 0:
+            raise ValueError("max_iterations must be positive")
 
 
 @dataclass(frozen=True)
@@ -52,7 +78,7 @@ async def run_cli_task(
     *,
     progress: ProgressSink | None = None,
 ) -> CliTaskRunResult:
-    """Run one CLI task through a deterministic dry-run session."""
+    """Run one CLI task through dry-run or live autonomous runtime."""
 
     sink = progress or (lambda _message: None)
     recorder = RuntimeReportRecorder(
@@ -68,37 +94,7 @@ async def run_cli_task(
     )
 
     if not settings.dry_run:
-        message_ru = (
-            "Режим с реальными браузерными действиями из команды run пока не подключен. "
-            "Для безопасной проверки повторите команду с --dry-run. Для браузерной "
-            "демонстрации используйте interview-demo или demo-vacancy-search."
-        )
-        event = _event(
-            "task_failed",
-            RuntimeStatus.FAILED,
-            task=settings.task,
-            state="failed",
-            current_step="live mode unavailable",
-            next_action="rerun with --dry-run",
-            success=False,
-            message=message_ru,
-            progress=_progress(0, 1, 0, 1),
-        )
-        recorder.record_event(event)
-        recorder.finalize(success=False, summary_ru=message_ru, failure_ru=message_ru)
-        artifacts = recorder.write(
-            report_path=settings.report_path,
-            replay_path=settings.replay_path,
-        )
-        _render_event(settings, dashboard, event, sink)
-        sink(message_ru)
-        return CliTaskRunResult(
-            success=False,
-            message_ru=message_ru,
-            report_path=artifacts.report_path,
-            replay_path=artifacts.replay_path,
-            dry_run=False,
-        )
+        return await _run_live_task(settings, recorder, dashboard, sink)
 
     events = _dry_run_events(settings.task)
     for event in events:
@@ -131,6 +127,296 @@ async def run_cli_task(
     )
 
 
+async def _run_live_task(
+    settings: CliTaskSettings,
+    recorder: RuntimeReportRecorder,
+    dashboard: RuntimeDashboard,
+    sink: ProgressSink,
+) -> CliTaskRunResult:
+    from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+    from scout_pilot.memory import HierarchicalMemory
+    from scout_pilot.observation import ObservationSettings, SemanticObservationEngine
+    from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
+
+    config = AppConfig.load()
+    provider_name = settings.provider or config.llm_provider.casefold()
+    try:
+        provider = _create_provider(provider_name, config)
+    except Exception as exc:
+        message_ru = _provider_start_error_ru(provider_name, exc)
+        event = _event(
+            "task_failed",
+            RuntimeStatus.FAILED,
+            task=settings.task,
+            state="failed",
+            current_step="provider_start_failed",
+            next_action="check_provider_configuration",
+            success=False,
+            message=message_ru,
+            error_type=type(exc).__name__,
+            progress=_progress(0, settings.max_iterations, 0, 0),
+        )
+        recorder.record_event(event)
+        _render_event(settings, dashboard, event, sink)
+        recorder.finalize(success=False, summary_ru=message_ru, failure_ru=message_ru)
+        artifacts = recorder.write(
+            report_path=settings.report_path,
+            replay_path=settings.replay_path,
+        )
+        sink(message_ru)
+        sink(f"Отчет: {artifacts.report_path}")
+        sink(f"Replay-файл: {artifacts.replay_path}")
+        return CliTaskRunResult(
+            success=False,
+            message_ru=message_ru,
+            report_path=artifacts.report_path,
+            replay_path=artifacts.replay_path,
+            dry_run=False,
+        )
+
+    browser_settings = replace(
+        BrowserEngineConfig.from_app_config(config),
+        headless=settings.headless,
+    )
+    browser = PlaywrightBrowserEngine(browser_settings)
+    observation_engine = SemanticObservationEngine(
+        browser,
+        ObservationSettings.from_app_config(config),
+    )
+    registry = create_browser_tool_registry()
+    tool_runtime = DefaultToolRuntime(
+        registry,
+        ToolContext(browser=browser, observation_engine=observation_engine),
+    )
+    tool_schemas = registry.schemas()
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(
+            provider,
+            ReasoningSettings(
+                model=config.llm_model,
+                max_output_tokens=config.llm_max_output_tokens,
+                timeout_seconds=config.llm_timeout_seconds,
+                max_input_tokens=config.max_context_tokens,
+            ),
+        ),
+        planning_engine=ProviderPlanningEngine(
+            provider,
+            PlanningSettings(
+                max_input_tokens=config.max_context_tokens,
+                max_output_tokens=config.llm_max_output_tokens,
+                timeout_seconds=config.llm_timeout_seconds,
+            ),
+        ),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=tool_schemas,
+        settings=RuntimeSettings(max_iterations=settings.max_iterations),
+        security_constraints=(
+            "Перед отправкой форм, откликами, сообщениями, покупками, загрузкой файлов "
+            "или удалением данных нужно явное подтверждение пользователя."
+        ),
+        confirmation_constraints=(
+            "Никогда не продолжай автоматически после confirmation_required.",
+        ),
+        budget={"remaining_tokens": config.max_context_tokens},
+    )
+
+    sink("Запускаю live-режим: браузер будет открыт, действия проходят через Tool Runtime.")
+    if provider_name == "mock":
+        sink("LLM-провайдер: mock. Внешние API-вызовы не выполняются.")
+    else:
+        sink(f"LLM-провайдер: {provider_name}. Автоматические тесты этот режим не используют.")
+    if settings.start_url:
+        sink(f"Стартовая страница: {settings.start_url}")
+
+    final_message = "Задача остановлена до формирования результата."
+    success = False
+    try:
+        await browser.start()
+        if settings.start_url:
+            navigation = await _execute_initial_navigation(
+                settings,
+                dashboard,
+                recorder,
+                sink,
+                tool_runtime,
+                tool_schemas,
+            )
+            if not navigation.success:
+                final_message = (
+                    "Не удалось открыть стартовую страницу. Проверьте URL, сеть и доступность сайта."
+                )
+                recorder.finalize(
+                    success=False,
+                    summary_ru=final_message,
+                    failure_ru=final_message,
+                )
+                artifacts = recorder.write(
+                    report_path=settings.report_path,
+                    replay_path=settings.replay_path,
+                )
+                sink(final_message)
+                sink(f"Отчет: {artifacts.report_path}")
+                sink(f"Replay-файл: {artifacts.replay_path}")
+                return CliTaskRunResult(
+                    success=False,
+                    message_ru=final_message,
+                    report_path=artifacts.report_path,
+                    replay_path=artifacts.replay_path,
+                    dry_run=False,
+                )
+
+        async for event in runtime.run(UserTask(settings.task)):
+            recorder.record_event(event)
+            _render_event(settings, dashboard, event, sink)
+
+        if runtime.last_result is None:
+            final_message = "Runtime завершился без итогового результата."
+            success = False
+        else:
+            success = runtime.last_result.success
+            final_message = _result_message_ru(runtime.last_result)
+        recorder.finalize(
+            success=success,
+            summary_ru=final_message,
+            failure_ru=None if success else final_message,
+        )
+        artifacts = recorder.write(
+            report_path=settings.report_path,
+            replay_path=settings.replay_path,
+        )
+        sink(final_message)
+        sink(f"Отчет: {artifacts.report_path}")
+        sink(f"Replay-файл: {artifacts.replay_path}")
+        return CliTaskRunResult(
+            success=success,
+            message_ru=final_message,
+            report_path=artifacts.report_path,
+            replay_path=artifacts.replay_path,
+            dry_run=False,
+        )
+    except KeyboardInterrupt:
+        runtime.cancel("User cancelled from CLI.")
+        final_message = "Задача отменена пользователем. Браузер будет закрыт."
+        event = _event(
+            "task_cancelled",
+            RuntimeStatus.CANCELLED,
+            task=settings.task,
+            state="cancelled",
+            current_step="user_cancelled",
+            success=False,
+            message=final_message,
+            progress=_progress(0, settings.max_iterations, 0, 0),
+        )
+        recorder.record_event(event)
+        _render_event(settings, dashboard, event, sink)
+        recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
+        artifacts = recorder.write(
+            report_path=settings.report_path,
+            replay_path=settings.replay_path,
+        )
+        sink(final_message)
+        return CliTaskRunResult(
+            success=False,
+            message_ru=final_message,
+            report_path=artifacts.report_path,
+            replay_path=artifacts.replay_path,
+            dry_run=False,
+        )
+    except Exception as exc:
+        final_message = _unexpected_live_error_ru(exc)
+        event = _event(
+            "task_failed",
+            RuntimeStatus.FAILED,
+            task=settings.task,
+            state="failed",
+            current_step="live_runtime_error",
+            next_action="check_report_and_debug_logs",
+            success=False,
+            message=final_message,
+            error_type=type(exc).__name__,
+            progress=_progress(0, settings.max_iterations, 0, 0),
+        )
+        recorder.record_event(event)
+        _render_event(settings, dashboard, event, sink)
+        recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
+        artifacts = recorder.write(
+            report_path=settings.report_path,
+            replay_path=settings.replay_path,
+        )
+        sink(final_message)
+        sink(f"Отчет: {artifacts.report_path}")
+        sink(f"Replay-файл: {artifacts.replay_path}")
+        return CliTaskRunResult(
+            success=False,
+            message_ru=final_message,
+            report_path=artifacts.report_path,
+            replay_path=artifacts.replay_path,
+            dry_run=False,
+        )
+    finally:
+        await browser.stop()
+        sink("Браузер закрыт.")
+
+
+async def _execute_initial_navigation(
+    settings: CliTaskSettings,
+    dashboard: RuntimeDashboard,
+    recorder: RuntimeReportRecorder,
+    sink: ProgressSink,
+    tool_runtime,
+    schemas: tuple[ToolSchema, ...],
+) -> ToolExecutionResult:
+    request = ToolRequest("browser.navigate", {"url": settings.start_url})
+    selected = _tool_selected_event(
+        settings,
+        request,
+        schemas,
+        next_action="execute_tool",
+    )
+    recorder.record_event(selected)
+    _render_event(settings, dashboard, selected, sink)
+    result = await tool_runtime.execute(request)
+    event = _event(
+        "tool_execution_finished",
+        RuntimeStatus.RUNNING if result.success else RuntimeStatus.FAILED,
+        task=settings.task,
+        state="executing",
+        tool_name=result.tool_name,
+        tool_status=result.status.value,
+        success=result.success,
+        message=result.message,
+        retryable=result.retryable,
+        error_code=result.error_code,
+        progress=_progress(0, settings.max_iterations, 0, 0),
+    )
+    recorder.record_event(event)
+    _render_event(settings, dashboard, event, sink)
+    return result
+
+
+def _create_provider(provider_name: str, config: AppConfig):
+    normalized = provider_name.casefold()
+    if normalized == "mock":
+        return DeterministicBrowserMockProvider()
+    provider = LlmProviderName(normalized)
+    api_key = (
+        config.provider_secrets.openai_api_key
+        if provider is LlmProviderName.OPENAI
+        else config.provider_secrets.anthropic_api_key
+    )
+    return create_llm_provider(
+        LlmProviderConfig(
+            provider=provider,
+            model=config.llm_model,
+            timeout_seconds=config.llm_timeout_seconds,
+            max_output_tokens=config.llm_max_output_tokens,
+            api_key=api_key,
+        )
+    )
+
+
 def default_artifact_paths(report_dir: Path, *, prefix: str = "task") -> RuntimeReportArtifacts:
     """Return timestamped report and replay paths under a private report directory."""
 
@@ -154,20 +440,171 @@ def _render_event(
             sink(message)
         return
     sink(dashboard.render_event(event))
+    detail = _event_detail_message(event, verbose=settings.dashboard == "verbose")
+    if detail:
+        sink(detail)
 
 
 def _compact_progress_message(event: RuntimeEvent) -> str:
     if event.name == "task_started":
         return "Задача принята."
     if event.name == "plan_created":
-        return "План сухого запуска подготовлен."
+        return "План выполнения подготовлен."
     if event.name == "tool_selected":
-        return "Инструмент выбран только для показа; выполнение пропущено."
+        tool = event.details.get("selected_tool") or event.details.get("tool_name")
+        arguments = event.details.get("selected_tool_arguments")
+        if arguments:
+            return f"Выбран инструмент {tool}: {_safe_json(arguments)}"
+        return f"Выбран инструмент {tool}."
+    if event.name == "tool_execution_finished":
+        return _tool_result_message(event)
+    if event.name == "confirmation_required":
+        return _confirmation_message(event)
     if event.name == "task_completed":
-        return "Задача завершена в режиме сухого запуска."
+        return "Задача завершена."
     if event.name == "task_failed":
         return "Задача остановлена."
     return ""
+
+
+def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
+    if event.name == "tool_selected":
+        tool = event.details.get("selected_tool") or event.details.get("tool_name")
+        arguments = event.details.get("selected_tool_arguments")
+        return f"Инструмент перед выполнением: {tool}; аргументы: {_safe_json(arguments or {})}"
+    if event.name == "tool_execution_finished":
+        return _tool_result_message(event)
+    if event.name == "confirmation_required":
+        return _confirmation_message(event)
+    if verbose and event.name == "reasoning_completed":
+        status = event.details.get("status")
+        message = event.details.get("message") or ""
+        return f"Решение reasoning: {status}. {message}"
+    if verbose and event.name == "context_budget_applied":
+        metrics = event.details.get("metrics")
+        if isinstance(metrics, dict):
+            before = metrics.get("before_tokens")
+            after = metrics.get("after_tokens")
+            return f"Контекст проверен и сжат при необходимости: {before} -> {after} токенов."
+    if verbose and event.name in {"observation_captured", "post_action_observation_captured"}:
+        title = event.details.get("title") or "без заголовка"
+        url = event.details.get("url") or "URL не определен"
+        return f"Наблюдение страницы: {title}; {url}"
+    return ""
+
+
+def _tool_result_message(event: RuntimeEvent) -> str:
+    tool = event.details.get("tool_name") or event.details.get("selected_tool") or "инструмент"
+    success = event.details.get("success")
+    if success is True:
+        return f"Инструмент {tool} завершился успешно."
+    message = event.details.get("message") or "подробности записаны в отчет."
+    return f"Инструмент {tool} остановился: {message}"
+
+
+def _confirmation_message(event: RuntimeEvent) -> str:
+    details = event.details
+    message = details.get("message_ru")
+    if isinstance(message, str) and message.strip():
+        return message
+    request = details.get("confirmation_request")
+    if isinstance(request, dict):
+        request_message = request.get("message_ru")
+        if isinstance(request_message, str) and request_message.strip():
+            return request_message
+    return "Нужно подтверждение пользователя. Агент остановился и не продолжит автоматически."
+
+
+def _safe_json(value: object) -> str:
+    return json.dumps(sanitize_for_report(value), ensure_ascii=False, sort_keys=True)
+
+
+def _tool_selected_event(
+    settings: CliTaskSettings,
+    request: ToolRequest,
+    schemas: tuple[ToolSchema, ...],
+    *,
+    next_action: str,
+) -> RuntimeEvent:
+    return _event(
+        "tool_selected",
+        RuntimeStatus.RUNNING,
+        task=settings.task,
+        state="executing",
+        selected_tool=request.name,
+        selected_tool_arguments=_redact_tool_arguments(request, schemas),
+        next_action=next_action,
+        progress=_progress(0, settings.max_iterations, 0, 0),
+    )
+
+
+def _redact_tool_arguments(
+    request: ToolRequest,
+    schemas: tuple[ToolSchema, ...],
+) -> dict[str, object]:
+    schema = next((schema for schema in schemas if schema.name == request.name), None)
+    sensitive_fields = (
+        schema.input_schema.sensitive_field_names() if schema is not None else set()
+    )
+    redacted: dict[str, object] = {}
+    for key, value in request.arguments.items():
+        if key in sensitive_fields or key.casefold() in {
+            "value",
+            "password",
+            "token",
+            "secret",
+            "api_key",
+            "cookie",
+        }:
+            redacted[key] = "[REDACTED]"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _result_message_ru(result) -> str:
+    if result.termination_reason is TaskTerminationReason.ANSWERED:
+        return result.answer or "Задача завершена."
+    if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
+        if result.confirmation_request is not None:
+            message = result.confirmation_request.get("message_ru")
+            if isinstance(message, str) and message.strip():
+                return message
+        return (
+            "Нужно подтверждение пользователя. Агент остановился перед действием, "
+            "которое может затронуть внешние системы или данные."
+        )
+    if result.termination_reason is TaskTerminationReason.REASONING_FAILURE:
+        return (
+            "Не удалось получить надежное решение от LLM-провайдера. Проверьте ключ, "
+            "модель, лимиты и сеть, затем повторите задачу."
+        )
+    if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
+        return "Достигнут лимит итераций. Попробуйте сузить задачу или задать стартовый URL."
+    if result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED:
+        return "Достигнут лимит повторных ошибок. Агент остановился, чтобы не зациклиться."
+    if result.termination_reason is TaskTerminationReason.CANCELLED:
+        return "Задача отменена пользователем."
+    return result.message or "Задача остановлена. Подробности сохранены в отчете."
+
+
+def _provider_start_error_ru(provider_name: str, exc: Exception) -> str:
+    if isinstance(exc, ValueError) and "API key" in str(exc):
+        return (
+            f"Не настроен API-ключ для провайдера {provider_name}. Добавьте ключ в локальный "
+            ".env или запустите проверку с --provider mock."
+        )
+    return (
+        f"Не удалось подготовить LLM-провайдера {provider_name}: {type(exc).__name__}. "
+        "Проверьте зависимости, настройки .env и выбранную модель."
+    )
+
+
+def _unexpected_live_error_ru(exc: Exception) -> str:
+    return (
+        f"Live-режим остановился из-за ошибки {type(exc).__name__}. "
+        "Браузер будет закрыт, безопасный отчет и replay сохранены."
+    )
 
 
 def _dry_run_events(task: str) -> tuple[RuntimeEvent, ...]:

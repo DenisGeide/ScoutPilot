@@ -10,7 +10,7 @@
 
 Критических несоответствий, которые можно безопасно исправить маленьким изменением в рамках этой проверки, не найдено. Проект закрывает основную архитектуру, безопасность, локальный demo path и тестовую базу. Оставшиеся ограничения описаны в README, technical defense и release checklist.
 
-Главное ограничение: обычный `scout-pilot run` пока работает как dry-run. Полноценный live autonomous LLM/browser режим не подключен к CLI; браузерное end-to-end поведение показывается через `interview-demo` и `demo-vacancy-search`. Это важно проговорить на интервью как границу текущей реализации, а не скрывать.
+Главное ограничение теперь не в наличии live CLI, а в честной демонстрации его границ: `scout-pilot run --live` подключен к основному runtime loop, но автоматические тесты используют mock provider и локальные страницы. Реальные OpenAI/Anthropic вызовы и live HH.ru smoke остаются ручными проверками, потому что требуют ключей, сети и могут остановиться на CAPTCHA, входе или измененной странице.
 
 ## Requirements matrix
 
@@ -18,8 +18,8 @@
 |---|---|---|---|
 | Visible browser launch | Проходит | `scout-pilot browser-smoke --headed`, `scout-pilot interview-demo --headed`, `PlaywrightBrowserEngine` | Headless режим доступен для CI/local checks. |
 | Persistent browser sessions | Проходит | `BrowserEngineConfig.user_data_dir`, `.browser-profiles/` в `.gitignore`, docs/interview demo profile | Профили локальные и не коммитятся. |
-| Natural-language task input | Проходит | `scout-pilot run "..." --dry-run`, `interactive`, `UserTask` models | Live browser execution for arbitrary `run` task remains a limitation. |
-| Autonomous multi-step browser actions | Частично | `AutonomousAgentRuntime` tests, `interview-demo`, `demo-vacancy-search` multi-step flow | Runtime exists and is tested; generic live CLI loop is not wired. |
+| Natural-language task input | Проходит | `scout-pilot run "..." --dry-run`, `scout-pilot run "..." --live`, `interactive`, `UserTask` models | Live режим можно запускать с `--provider mock` без внешних API. |
+| Autonomous multi-step browser actions | Проходит с оговоркой | `AutonomousAgentRuntime` tests, `run --live --provider mock`, `interview-demo`, `demo-vacancy-search` multi-step flow | Runtime loop подключен к CLI; качество реальных сайтов зависит от провайдера и страницы. |
 | OpenAI or Anthropic provider support | Проходит | `OpenAILlmProvider`, `AnthropicLlmProvider`, `MockLlmProvider`, provider tests | Automated tests use mocks; live API calls are intentionally not CI evidence. |
 | Playwright automation | Проходит | `scout_pilot.browser`, browser smoke, local Playwright tests | Playwright imports are isolated to Browser Engine. |
 | No hardcoded CSS selectors or XPath in app workflows | Проходит | semantic navigation tools, boundary scans, tests on local test sites | Browser Engine uses generic Playwright locators internally; demo layer has no site-specific selectors. |
@@ -39,8 +39,8 @@
 
 ## Residual risks
 
-- `scout-pilot run --live` is intentionally unavailable. A reviewer expecting arbitrary live autonomous browsing from the main CLI will see this as a product gap.
-- GitHub remote is not configured in the local repository. Publication requires the owner to run `git remote add origin <GitHub repository URL>` and push.
+- Live CLI проверяется детерминированно через mock provider; реальные provider calls требуют локальных ключей и ручной smoke-проверки.
+- Если GitHub authentication недоступна локально, push должен выполнить владелец репозитория.
 - Live HH.ru behavior is not deterministic. CAPTCHA, login, region selection or A/B markup can stop the smoke flow.
 - Live provider calls are not part of automated validation. Provider adapters are covered with mocks to avoid secrets and network dependency.
 - Report safety relies on sanitizer coverage. New report fields must keep regression tests for raw HTML, tokens, cookies and private paths.
@@ -51,7 +51,7 @@ The repository is acceptable for interview review as a clean, defensible Junior+
 
 - show local deterministic tests and `interview-demo`;
 - explain that HH.ru is a manual smoke target, not CI;
-- state that `run` is dry-run and full live arbitrary-task CLI is future work;
+- показать `scout-pilot run --live --provider mock --start-url <URL>` как основной CLI-путь и честно отделить его от ручных live provider/HH.ru проверок;
 - do not claim production readiness or guaranteed live HH.ru success.
 
-No source-code changes were made during this acceptance review.
+Этот отчет отражает текущее состояние после подключения live CLI к основному runtime loop.

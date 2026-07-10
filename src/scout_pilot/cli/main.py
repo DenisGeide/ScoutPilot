@@ -46,15 +46,40 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--live",
         action="store_true",
-        help="Запросить режим с реальными действиями. Сейчас он остановится и предложит безопасный dry-run.",
+        help="Запустить live-режим: видимый браузер, runtime, LLM/tool loop и отчеты.",
+    )
+    run_parser.add_argument(
+        "--start-url",
+        help="Начальный URL, который агент откроет через Tool Runtime перед циклом.",
+    )
+    run_parser.add_argument(
+        "--provider",
+        choices=("openai", "anthropic", "mock"),
+        help="LLM-провайдер для live-режима. По умолчанию берется из .env.",
+    )
+    run_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        help="Максимум observe/think/tool итераций в live-режиме.",
+    )
+    run_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить live-браузер без видимого окна.",
+    )
+    run_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно запустить видимое окно браузера. Это режим по умолчанию для --live.",
     )
     run_parser.add_argument("--report-path", help="Куда сохранить JSON-отчет.")
     run_parser.add_argument("--replay-path", help="Куда сохранить JSON replay.")
     run_parser.add_argument(
         "--dashboard",
-        choices=("compact", "off"),
+        choices=("compact", "verbose", "off"),
         default="compact",
-        help="Показывать компактный статус выполнения или только короткие сообщения.",
+        help="Показывать компактный/подробный статус выполнения или только короткие сообщения.",
     )
 
     interactive_parser = subparsers.add_parser(
@@ -70,7 +95,23 @@ def build_parser() -> argparse.ArgumentParser:
     interactive_parser.add_argument(
         "--live",
         action="store_true",
-        help="Запросить режим с реальными действиями. Сейчас он остановится и предложит безопасный dry-run.",
+        help="Запускать введенные задачи в live-режиме.",
+    )
+    interactive_parser.add_argument(
+        "--provider",
+        choices=("openai", "anthropic", "mock"),
+        help="LLM-провайдер для live-задач. По умолчанию берется из .env.",
+    )
+    interactive_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        help="Максимум observe/think/tool итераций для одной live-задачи.",
+    )
+    interactive_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запускать live-браузер без видимого окна.",
     )
     interactive_parser.add_argument(
         "--report-dir",
@@ -78,9 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     interactive_parser.add_argument(
         "--dashboard",
-        choices=("compact", "off"),
+        choices=("compact", "verbose", "off"),
         default="compact",
-        help="Показывать компактный статус выполнения или только короткие сообщения.",
+        help="Показывать компактный/подробный статус выполнения или только короткие сообщения.",
     )
 
     smoke_parser = subparsers.add_parser(
@@ -226,10 +267,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "run":
-        return asyncio.run(_run_task(args))
+        try:
+            return asyncio.run(_run_task(args))
+        except KeyboardInterrupt:
+            print("Задача отменена пользователем.")
+            return 130
 
     if args.command == "interactive":
-        return asyncio.run(_run_interactive(args))
+        try:
+            return asyncio.run(_run_interactive(args))
+        except KeyboardInterrupt:
+            print("Интерактивный режим отменен пользователем.")
+            return 130
 
     if args.command == "browser-smoke":
         return asyncio.run(_run_browser_smoke(args))
@@ -252,11 +301,11 @@ def _print_status(config: AppConfig) -> None:
         "Security Policy, Universal Semantic Navigation и слой demo/reporting."
     )
     print(
-        "Демо поиска вакансий запускается командой demo-vacancy-search с URL, который "
-        "передает пользователь. Live LLM-вызовы из обычного CLI пока не включены."
+        "Live-режим запускается через scout-pilot run \"текст задачи\" --live "
+        "--start-url <URL>. Для детерминированной проверки используйте --provider mock."
     )
     print("Локальное демо для интервью доступно через scout-pilot interview-demo.")
-    print("Одну задачу можно запустить через scout-pilot run \"текст задачи\" --dry-run.")
+    print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
@@ -280,13 +329,18 @@ async def _run_task(args: argparse.Namespace) -> int:
         report_path=Path(args.report_path) if args.report_path else default_paths.report_path,
         replay_path=Path(args.replay_path) if args.replay_path else default_paths.replay_path,
         dashboard=args.dashboard,
+        start_url=args.start_url,
+        provider=args.provider,
+        max_iterations=args.max_iterations,
+        headless=False if args.headed else bool(args.headless),
     )
     result = await run_cli_task(settings, progress=print)
     if result.success:
         return 0
     print(
-        "Что можно сделать дальше: повторите команду с --dry-run или запустите "
-        "браузерную демонстрацию через interview-demo / demo-vacancy-search."
+        "Что можно сделать дальше: проверьте отчет/replay, уточните задачу, "
+        "стартовый URL или настройки LLM-провайдера. Для безопасной проверки "
+        "можно повторить команду с --dry-run или --provider mock."
     )
     return 1
 
@@ -319,6 +373,9 @@ async def _run_interactive(args: argparse.Namespace) -> int:
             report_path=default_paths.report_path,
             replay_path=default_paths.replay_path,
             dashboard=args.dashboard,
+            provider=args.provider,
+            max_iterations=args.max_iterations,
+            headless=True if args.headless else False,
         )
         result = await run_cli_task(settings, progress=print)
         if not result.success:
