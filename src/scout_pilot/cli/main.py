@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     demo_parser = subparsers.add_parser(
         "demo-vacancy-search",
-        help="Запустить generic-демо поиска вакансий с пользовательского URL.",
+        help="Запустить общее демо поиска вакансий с пользовательского URL.",
     )
     demo_parser.add_argument(
         "--start-url",
@@ -161,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     interview_parser = subparsers.add_parser(
         "interview-demo",
-        help="Запустить локальное interview demo на deterministic synthetic pages.",
+        help="Запустить локальное interview demo на тестовых страницах.",
     )
     interview_parser.add_argument(
         "--query",
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     interview_parser.add_argument(
         "--site-dir",
-        help="Куда сгенерировать synthetic site. По умолчанию reports/tmp/interview-demo-site.",
+        help="Куда сгенерировать тестовый сайт. По умолчанию reports/tmp/interview-demo-site.",
     )
     interview_parser.add_argument(
         "--profile-dir",
@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--wait-after-search-ms",
         type=int,
         default=200,
-        help="Сколько миллисекунд ждать после запуска поиска на synthetic page.",
+        help="Сколько миллисекунд ждать после запуска поиска на тестовой странице.",
     )
     return parser
 
@@ -245,7 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _print_status(config: AppConfig) -> None:
-    print("Scout Pilot: фундамент проекта готов.")
+    print("Scout Pilot: проект установлен, основные слои доступны.")
     print(
         "Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, "
         "Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution "
@@ -257,7 +257,7 @@ def _print_status(config: AppConfig) -> None:
         "передает пользователь. Live LLM-вызовы из CLI пока не включены."
     )
     print("Локальное interview demo доступно через scout-pilot interview-demo.")
-    print("Single-task CLI доступен через scout-pilot run \"текст задачи\" --dry-run.")
+    print("Одну задачу можно запустить через scout-pilot run \"текст задачи\" --dry-run.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
@@ -457,7 +457,7 @@ async def _run_interview_demo(args: argparse.Namespace) -> int:
     if result.success:
         print("Локальное interview demo завершено. Реальные отклики и сообщения не отправлялись.")
         return 0
-    print("Демо остановилось честно. Проверьте отчет и replay для причины остановки.")
+    print("Демо остановилось. Проверьте отчет и replay, чтобы увидеть причину.")
     return 1
 
 

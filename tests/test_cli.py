@@ -10,7 +10,7 @@ def test_status_command_prints_russian_placeholder(capsys):
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "фундамент проекта готов" in captured.out
+    assert "проект установлен, основные слои доступны" in captured.out
     assert "Universal Semantic Navigation" in captured.out
     assert "demo/reporting слой подключены" in captured.out
     assert "Semantic Observation Engine" in captured.out

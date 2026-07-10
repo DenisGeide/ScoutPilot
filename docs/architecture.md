@@ -1,6 +1,6 @@
 # Архитектура
 
-Scout Pilot строится как набор независимых слоев. Реализованные слои имеют конкретные адаптеры или bounded in-memory реализации; будущие слои пока представлены протоколами и доменными моделями.
+Scout Pilot устроен как набор независимых слоев. Реализованные слои имеют конкретные адаптеры или ограниченные in-memory реализации; будущие точки расширения представлены протоколами и доменными моделями.
 
 ## Слои
 
@@ -9,17 +9,17 @@ Scout Pilot строится как набор независимых слоев
 | Browser Engine | `scout_pilot.browser` | Управляет видимым браузером, сессиями, навигацией и диагностическими скриншотами. Playwright изолирован здесь. |
 | Semantic Observation Engine | `scout_pilot.observation` | Преобразует контролируемый Browser Engine snapshot в компактное семантическое наблюдение без полного HTML и значений чувствительных полей. |
 | Universal Semantic Navigation | `scout_pilot.navigation` | Разрешает website-neutral navigation intents по semantic observation IDs, выбирает ссылки/кнопки/поля по roles, names и visible context, обнаруживает search fields, строит form-fill plan и помогает восстановиться после stale IDs. |
-| Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через provider-neutral схемы, ведет history и structured logs. |
+| Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через схемы без привязки к провайдеру, ведет history и structured logs. |
 | LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом, содержит provider-specific tool schema adapters и Reasoning Engine. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет короткий provider-neutral план по user goal, semantic observation, memory summaries и available tool schemas, не исполняя tools. |
-| Hierarchical Memory | `scout_pilot.memory` | Хранит bounded working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
+| Hierarchical Memory | `scout_pilot.memory` | Хранит ограниченную working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует observe-think-plan-act-evaluate loop, state machine, memory, tool execution, progress, cancellation и explicit termination. |
 | Execution Intelligence | `scout_pilot.intelligence` | Оценивает tool outcomes, прогресс, no-op действия, повторные ошибки, валидность плана и необходимость retry/replan/confirmation/stop. |
 | Context Budgeting and Compression | `scout_pilot.context` | Оценивает model input size, резервирует output tokens, сжимает observations/memory, удаляет повторяющийся boilerplate и отдает прозрачные before/after metrics для runtime/debug. |
 | Independent Security Policy Layer | `scout_pilot.security` | Детерминированно классифицирует tool requests как `safe`, `sensitive`, `destructive` или `external_side_effect`, требует подтверждение на русском и ведет audit trail. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском, поддерживает single-task dry-run, interactive mode, compact dashboard и verbose structured logs. |
 | Reporting and replay | `scout_pilot.reporting` | Формирует HTML-free JSON-отчеты, фиксирует безопасные replay events, выбранные tools, security pauses и итоговые заметки, редактирует чувствительные поля перед записью. |
-| Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. Локальный `interview-demo` генерирует synthetic site, а live HH.ru остается ручным smoke flow. |
+| Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. Локальный `interview-demo` генерирует тестовый сайт, а live HH.ru остается ручной smoke-проверкой. |
 
 ## Правила границ
 
@@ -60,7 +60,7 @@ Scout Pilot строится как набор независимых слоев
 
 ## Runtime lifecycle
 
-Autonomous Agent Runtime выполняет задачу как bounded loop:
+Autonomous Agent Runtime выполняет задачу как ограниченный цикл:
 
 1. Создает task scope и сохраняет user goal в task memory.
 2. Переходит в `observing` и получает compact semantic observation.
@@ -90,4 +90,4 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 ## Будущие этапы
 
 1. Полноценный автономный CLI-режим может использовать уже готовые semantic tools, security confirmations и безопасный report/replay формат.
-2. Live HH.ru smoke остается ручной проверкой: автоматические тесты продолжают опираться на synthetic pages и mocked providers.
+2. Live HH.ru smoke остается ручной проверкой: автоматические тесты продолжают опираться на локальные тестовые страницы и mocked providers.

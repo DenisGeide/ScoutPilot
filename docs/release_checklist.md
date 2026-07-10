@@ -1,6 +1,6 @@
 # Release checklist
 
-Этот чек-лист нужен перед отправкой репозитория на GitHub или перед показом на интервью. Он не заменяет тесты и не является release automation.
+Этот чек-лист нужен перед отправкой репозитория на GitHub или перед показом на интервью. Он не заменяет тесты и не автоматизирует релиз.
 
 ## Что проверено локально
 
@@ -38,7 +38,7 @@ rg -n "hh\.ru|/vacancy|/jobs|/search|xpath|queryselector|locator\(" src\scout_pi
 - `reports/tmp/`, `reports/private/`, приватные screenshots и `.har`;
 - live HH.ru evidence, если оно содержит приватные данные или raw HTML.
 
-Санитизированные demo/replay артефакты сейчас не хранятся в репозитории намеренно. Локальное `interview-demo` генерирует их заново в ignored `reports/tmp/`.
+Очищенные demo/replay артефакты сейчас намеренно не хранятся в репозитории. Локальное `interview-demo` генерирует их заново в ignored `reports/tmp/`.
 
 ## GitHub перед публикацией
 
@@ -66,7 +66,7 @@ git push -u origin main
 Состояние проекта:
 
 - готов для клонирования, чтения, локального запуска тестов и interview demo;
-- не заявляет production-ready статус;
+- не заявляет готовность к реальной эксплуатации;
 - обычный `scout-pilot run` остается dry-run;
 - live HH.ru smoke выполняется вручную и может остановиться на CAPTCHA, login, регионе или измененной странице;
 - live LLM provider calls не входят в автоматические тесты.

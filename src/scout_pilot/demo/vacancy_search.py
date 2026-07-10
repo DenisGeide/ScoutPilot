@@ -176,7 +176,7 @@ class VacancySearchDemoRunner:
 
             initial_observation = await self._observe(report, phase="initial_page")
             if _has_blocking_issue(initial_observation):
-                message_ru = "Страница выглядит заблокированной или пустой. Демо остановлено честно."
+                message_ru = "Страница выглядит заблокированной или пустой. Демо остановлено."
                 return _final_result(report, settings, notes, False, "page_not_available", message_ru)
 
             emit("Ищу поле поиска по семантическим признакам.")

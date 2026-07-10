@@ -63,7 +63,7 @@ class InterviewDemoResult:
 
 @dataclass(frozen=True)
 class LocalInterviewSite:
-    """Generated synthetic site metadata."""
+    """Generated local test site metadata."""
 
     root: Path
     start_page_name: str = "index.html"
@@ -83,7 +83,7 @@ async def run_local_interview_demo(
         if progress is not None:
             progress(message_ru)
 
-    emit("Готовлю локальный synthetic site для interview demo.")
+    emit("Готовлю локальный тестовый сайт для interview demo.")
     emit(f"Постоянный профиль браузера настроен: {settings.profile_dir}. Путь исключен из Git.")
 
     with LocalDemoServer(site.root) as server:
@@ -142,7 +142,7 @@ async def run_local_interview_demo(
 
 
 def prepare_local_interview_site(root: Path) -> LocalInterviewSite:
-    """Create deterministic synthetic pages used by the local interview demo."""
+    """Create deterministic local test pages used by the interview demo."""
 
     root.mkdir(parents=True, exist_ok=True)
     pages = (
@@ -178,7 +178,7 @@ def prepare_local_interview_site(root: Path) -> LocalInterviewSite:
 
 
 class LocalDemoServer:
-    """Small local HTTP server for deterministic synthetic pages."""
+    """Small local HTTP server for deterministic local test pages."""
 
     def __init__(self, root: Path) -> None:
         self._root = root

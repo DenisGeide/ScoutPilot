@@ -12,7 +12,7 @@ python -m pytest
 
 ## Что покрывают тесты
 
-- Browser Engine на локальных synthetic pages.
+- Browser Engine на локальных тестовых страницах.
 - Semantic Observation Engine без полного HTML в model-facing структурах.
 - Tool Runtime: validation, timeout, browser failure, security pause, logging.
 - LLM Provider Layer через mocked providers и fake clients.
@@ -20,8 +20,8 @@ python -m pytest
 - Hierarchical Memory, Context Budgeting и privacy filtering.
 - Autonomous Agent Runtime, cancellation, retry/failure limits и confirmation pause.
 - Execution Intelligence: no-op, repeated failures, stale elements, replanning.
-- Universal Semantic Navigation на разных synthetic sites.
-- HH.ru-like vacancy flow на локальных synthetic pages.
+- Universal Semantic Navigation на разных локальных тестовых сайтах.
+- HH.ru-like vacancy flow на локальных тестовых страницах.
 - CLI parsing, dry-run report/replay и sanitizer.
 
 ## Локальные smoke-проверки
