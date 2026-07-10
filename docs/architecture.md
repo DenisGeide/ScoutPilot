@@ -17,8 +17,8 @@ Scout Pilot строится как набор независимых слоев
 | Execution Intelligence | `scout_pilot.intelligence` | Оценивает tool outcomes, прогресс, no-op действия, повторные ошибки, валидность плана и необходимость retry/replan/confirmation/stop. |
 | Context Budgeting and Compression | `scout_pilot.context` | Оценивает model input size, резервирует output tokens, сжимает observations/memory, удаляет повторяющийся boilerplate и отдает прозрачные before/after metrics для runtime/debug. |
 | Independent Security Policy Layer | `scout_pilot.security` | Детерминированно классифицирует tool requests как `safe`, `sensitive`, `destructive` или `external_side_effect`, требует подтверждение на русском и ведет audit trail. |
-| CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском. |
-| Reporting and replay | `scout_pilot.reporting` | Формирует HTML-free JSON-отчеты, фиксирует безопасные replay events, выбранные tools, security pauses и итоговые заметки. |
+| CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском, поддерживает single-task dry-run, interactive mode, compact dashboard и verbose structured logs. |
+| Reporting and replay | `scout_pilot.reporting` | Формирует HTML-free JSON-отчеты, фиксирует безопасные replay events, выбранные tools, security pauses и итоговые заметки, редактирует чувствительные поля перед записью. |
 | Demonstrations | `scout_pilot.demo` | Собирает end-to-end сценарии поверх общих слоев без per-site selectors, hardcoded internal routes или прямого доступа к Playwright. |
 
 ## Правила границ
@@ -49,6 +49,9 @@ Scout Pilot строится как набор независимых слоев
 - Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.
 - HH.ru допускается как live smoke target в документации, но не как source-code workflow: в `scout_pilot.demo` не должно быть HH.ru routes, CSS selectors, XPath или assumptions о внутренних путях сайта.
 - Demo reports включают компактные observations, tool decisions, security pauses и short notes; полный HTML, DOM dumps, cookies, tokens, profile data и значения чувствительных полей туда не попадают.
+- CLI dry-run sessions пишут runtime report и replay через `RuntimeReportRecorder`; sanitizer редактирует raw HTML, DOM-like поля, cookies, tokens, API keys, passwords, browser profile paths, session state и private screenshots.
+- CLI dashboard строится только из `RuntimeEvent.details`, не читает Playwright, provider SDKs, raw HTML или browser session data.
+- Verbose/debug CLI logs являются внутренними JSON-lines на английском; пользовательский прогресс и ошибки остаются на русском.
 - Execution Intelligence получает только compact observations, provider-neutral tool results и plan state; он не обращается к Playwright, provider SDKs, raw HTML, cookies или browser profiles.
 - Reflection summaries сохраняются в memory как компактные episodic summaries, а не как raw traces.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.

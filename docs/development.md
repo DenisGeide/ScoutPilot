@@ -36,6 +36,8 @@
 - Security audit trail хранит классификацию, outcome и confirmation id, но не должен раскрывать значения чувствительных полей.
 - Demo flows должны начинаться с URL, переданного пользователем, и работать через semantic observations/tool runtime. HH.ru можно использовать только как live smoke target, а не как hardcoded workflow.
 - Demo reports должны хранить безопасные observations, выбранные tools, security pauses и short notes; не включать полный HTML, DOM dumps, cookies, tokens, profile data, приватные скриншоты и значения чувствительных полей.
+- CLI `run` и `interactive` должны показывать русский progress/dashboard и писать report/replay только через sanitizer. Не добавлять raw logs, HTML, cookies, tokens, browser profiles, session data или чувствительные form values в пользовательские артефакты.
+- Internal verbose/debug logs должны оставаться machine-readable English JSON-lines и не заменять русские пользовательские сообщения.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.
@@ -54,6 +56,19 @@ scout-pilot status
 
 ```powershell
 scout-pilot browser-smoke --headed --hold-seconds 5
+```
+
+Проверка CLI dry-run и report/replay:
+
+```powershell
+scout-pilot run "Проверить страницу и подготовить краткий отчет" --dry-run
+scout-pilot --verbose run "Проверить страницу" --dry-run --dashboard off
+```
+
+Интерактивный режим:
+
+```powershell
+scout-pilot interactive --dry-run
 ```
 
 Локальная проверка demo flow без живого сайта:

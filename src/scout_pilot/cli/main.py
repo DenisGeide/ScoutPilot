@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import logging
+import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -16,8 +19,69 @@ def build_parser() -> argparse.ArgumentParser:
         prog="scout-pilot",
         description="Автономный браузерный агент Scout Pilot.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Показать внутренние structured logs уровня INFO.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Показать подробные внутренние structured logs уровня DEBUG.",
+    )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Показать состояние текущего этапа.")
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Принять одну задачу на естественном языке и показать ход выполнения.",
+    )
+    run_parser.add_argument("task", nargs="+", help="Текст задачи на естественном языке.")
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Безопасный сухой запуск без браузерных действий. Сейчас это режим по умолчанию.",
+    )
+    run_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Запросить live-режим. Пока он вернет понятную ошибку и предложит dry-run.",
+    )
+    run_parser.add_argument("--report-path", help="Куда сохранить JSON-отчет.")
+    run_parser.add_argument("--replay-path", help="Куда сохранить JSON replay.")
+    run_parser.add_argument(
+        "--dashboard",
+        choices=("compact", "off"),
+        default="compact",
+        help="Показывать компактный статус выполнения или только короткие сообщения.",
+    )
+
+    interactive_parser = subparsers.add_parser(
+        "interactive",
+        help="Запустить спокойный интерактивный CLI-режим.",
+    )
+    interactive_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Безопасный сухой запуск для каждой введенной задачи.",
+    )
+    interactive_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Запросить live-режим. Пока он вернет понятную ошибку и предложит dry-run.",
+    )
+    interactive_parser.add_argument(
+        "--report-dir",
+        help="Папка для report/replay артефактов. По умолчанию reports/tmp.",
+    )
+    interactive_parser.add_argument(
+        "--dashboard",
+        choices=("compact", "off"),
+        default="compact",
+        help="Показывать компактный статус выполнения или только короткие сообщения.",
+    )
 
     smoke_parser = subparsers.add_parser(
         "browser-smoke",
@@ -96,11 +160,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _configure_logging(verbose=args.verbose, debug=args.debug)
 
     if args.command in (None, "status"):
         config = AppConfig.load()
         _print_status(config)
         return 0
+
+    if args.command == "run":
+        return asyncio.run(_run_task(args))
+
+    if args.command == "interactive":
+        return asyncio.run(_run_interactive(args))
 
     if args.command == "browser-smoke":
         return asyncio.run(_run_browser_smoke(args))
@@ -124,10 +195,70 @@ def _print_status(config: AppConfig) -> None:
         "Демо поиска вакансий запускается командой demo-vacancy-search с URL, который "
         "передает пользователь. Live LLM-вызовы из CLI пока не включены."
     )
+    print("Single-task CLI доступен через scout-pilot run \"текст задачи\" --dry-run.")
+    print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
     mode = "без видимого окна" if config.browser_headless else "с видимым окном"
     print(f"Режим браузера по умолчанию: {mode}.")
+
+
+async def _run_task(args: argparse.Namespace) -> int:
+    from scout_pilot.cli.task_session import (
+        CliTaskSettings,
+        default_artifact_paths,
+        run_cli_task,
+    )
+
+    config = AppConfig.load()
+    task_text = " ".join(args.task).strip()
+    default_paths = default_artifact_paths(config.reports_dir / "tmp")
+    settings = CliTaskSettings(
+        task=task_text,
+        dry_run=not args.live,
+        report_path=Path(args.report_path) if args.report_path else default_paths.report_path,
+        replay_path=Path(args.replay_path) if args.replay_path else default_paths.replay_path,
+        dashboard=args.dashboard,
+    )
+    result = await run_cli_task(settings, progress=print)
+    if result.success:
+        return 0
+    print("Что можно сделать дальше: запустите с --dry-run или используйте demo-vacancy-search.")
+    return 1
+
+
+async def _run_interactive(args: argparse.Namespace) -> int:
+    from scout_pilot.cli.task_session import (
+        CliTaskSettings,
+        default_artifact_paths,
+        run_cli_task,
+    )
+
+    config = AppConfig.load()
+    report_dir = Path(args.report_dir) if args.report_dir else config.reports_dir / "tmp"
+    print("Интерактивный режим Scout Pilot.")
+    print("Введите задачу и нажмите Enter. Для выхода введите пустую строку или `выход`.")
+    while True:
+        try:
+            task_text = input("Задача> ").strip()
+        except EOFError:
+            print("Ввод завершен.")
+            return 0
+        if not task_text or task_text.casefold() in {"exit", "quit", "выход"}:
+            print("Интерактивный режим завершен.")
+            return 0
+
+        default_paths = default_artifact_paths(report_dir, prefix="interactive")
+        settings = CliTaskSettings(
+            task=task_text,
+            dry_run=not args.live,
+            report_path=default_paths.report_path,
+            replay_path=default_paths.replay_path,
+            dashboard=args.dashboard,
+        )
+        result = await run_cli_task(settings, progress=print)
+        if not result.success:
+            print("Задача не была выполнена. Можно ввести новую задачу или выйти.")
 
 
 async def _run_browser_smoke(args: argparse.Namespace) -> int:
@@ -216,3 +347,37 @@ async def _run_vacancy_demo(args: argparse.Namespace) -> int:
     if result.stop_reason == "confirmation_required":
         return 2
     return 1
+
+
+def _configure_logging(*, verbose: bool, debug: bool) -> None:
+    level = logging.DEBUG if debug else logging.INFO if verbose else logging.WARNING
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(_StructuredLogFormatter())
+    logging.basicConfig(level=level, handlers=[handler], force=True)
+
+
+class _StructuredLogFormatter(logging.Formatter):
+    """Emit compact JSON logs for internal diagnostics."""
+
+    _EXTRA_KEYS = (
+        "event",
+        "task_id",
+        "state",
+        "status",
+        "tool_name",
+        "dry_run",
+        "error_code",
+    )
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, object] = {
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for key in self._EXTRA_KEYS:
+            if hasattr(record, key):
+                payload[key] = getattr(record, key)
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False, default=str)

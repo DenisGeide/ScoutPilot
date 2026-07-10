@@ -2,7 +2,7 @@
 
 Scout Pilot — учебный автономный браузерный агент для интервью-проекта. Цель репозитория — показать понятную, поддерживаемую архитектуру, которую Junior+/Middle Python AI developer сможет объяснить, защитить и развивать дальше.
 
-На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Independent Security Policy Layer, Universal Semantic Navigation и end-to-end demo/reporting слой: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач, ограниченная иерархическая память, автономный observe-think-plan-act-evaluate цикл, детерминированная оценка результатов действий, бюджетированная сборка model-facing контекста, независимая проверка действий перед Tool Runtime, generic semantic navigation без hardcoded routes/selectors и демонстрационный поиск вакансий с безопасным JSON-отчетом.
+На этом этапе реализованы фундамент проекта, Browser Engine, Semantic Observation Engine, provider-neutral Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Independent Security Policy Layer, Universal Semantic Navigation и CLI/reporting слой: структура пакета, конфигурация, доменные модели, границы слоев, базовый CLI, документация, детерминированные тесты, изолированный слой Playwright, компактные семантические наблюдения страниц, нейтральные browser tools, pluggable OpenAI/Anthropic adapters, provider-neutral планирование задач, ограниченная иерархическая память, автономный observe-think-plan-act-evaluate цикл, детерминированная оценка результатов действий, бюджетированная сборка model-facing контекста, независимая проверка действий перед Tool Runtime, generic semantic navigation без hardcoded routes/selectors, демонстрационный поиск вакансий с безопасным JSON-отчетом, single-task CLI dry-run, интерактивный режим, компактный dashboard и безопасные replay/report артефакты.
 
 ## Установка
 
@@ -29,7 +29,29 @@ python -m pytest
 scout-pilot status
 ```
 
-Ожидаемый результат CLI на текущем этапе — короткое русскоязычное сообщение о том, что фундамент, Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting и Security Policy готовы. Universal Semantic Navigation подключена внутри browser tools и покрыта локальными synthetic tests. Live LLM-вызовы и полноценный автономный запуск из CLI пока не включены.
+Ожидаемый результат CLI на текущем этапе — короткое русскоязычное сообщение о том, что фундамент, Browser Engine, Semantic Observation Engine, Tool Runtime, LLM Provider Layer, Planning Engine, Hierarchical Memory, Autonomous Agent Runtime, Execution Intelligence, Context Budgeting, Security Policy, Universal Semantic Navigation и CLI/reporting слой готовы. Live LLM-вызовы из CLI пока не включены, поэтому обычный `run` выполняет безопасный dry-run.
+
+Single-task dry-run:
+
+```powershell
+scout-pilot run "Найди три подходящие вакансии Python AI Developer" --dry-run
+```
+
+Команда показывает компактный runtime dashboard: задачу, состояние, текущий шаг, выбранный инструмент, прогресс, прошедшее время и следующее действие. Реальные браузерные действия, LLM-вызовы и отправка данных в dry-run не выполняются.
+
+Чтобы увидеть внутренние structured logs на английском:
+
+```powershell
+scout-pilot --verbose run "Проверить страницу" --dry-run --dashboard off
+```
+
+Интерактивный режим:
+
+```powershell
+scout-pilot interactive --dry-run
+```
+
+Отчеты и replay по умолчанию сохраняются в `reports/tmp/`, который исключен из Git. Они не должны содержать raw HTML, cookies, tokens, browser profiles, приватные скриншоты, API keys или значения чувствительных полей.
 
 Для локальной smoke-проверки видимого браузера:
 
@@ -96,6 +118,9 @@ HH.ru может показать CAPTCHA, выбор региона, стран
 - Universal Semantic Navigation разрешает намерения через semantic observation IDs, умеет находить generic search fields, планировать заполнение форм по labels/accessibility names, отличать неоднозначные цели и восстанавливаться после stale semantic IDs через повторное наблюдение.
 - Демо поиска вакансий использует только пользовательский стартовый URL и обнаруженные на странице ссылки; HH.ru описан как ручной live smoke, а не как hardcoded workflow.
 - JSON-отчет демо хранит безопасные observations, выбранные tools, security pauses и короткие заметки без полного HTML.
+- CLI `run` принимает задачу на естественном языке и показывает dry-run dashboard без live LLM и без браузерных действий.
+- CLI `interactive` позволяет вводить несколько задач подряд в том же безопасном dry-run режиме.
+- Runtime report/replay артефакты проходят через sanitizer и редактируют raw HTML, приватные пути, cookies, tokens, passwords, secrets и API keys.
 - Полные HTML-страницы, DOM-дампы и значения чувствительных полей не входят в публичные модели.
 
 ## Следующий этап
