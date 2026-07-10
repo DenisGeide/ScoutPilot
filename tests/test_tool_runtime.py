@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scout_pilot.browser.types import BrowserActionResult, BrowserState, ScreenshotResult
-from scout_pilot.models import PageObservation, ToolRequest
+from scout_pilot.models import ActionRisk, InteractiveElement, PageObservation, ToolRequest
 from scout_pilot.tools import (
     DefaultToolRuntime,
     PreExecutionDecision,
@@ -45,6 +45,7 @@ def test_tool_runtime_executes_success_and_records_structured_history(caplog):
     assert browser.actions == [("navigate", "https://example.test")]
     assert runtime.history[-1].tool_name == "browser.navigate"
     assert runtime.history[-1].arguments == {"url": "https://example.test"}
+    assert runtime.security_audit_trail[-1].outcome == "allowed"
     assert "tool_execution_started" in caplog.text
     assert "tool_execution_finished" in caplog.text
 
@@ -117,19 +118,29 @@ def test_pre_execution_hook_blocks_before_browser_is_touched():
     assert browser.actions == []
 
 
-def test_sensitive_fill_value_is_redacted_from_history():
+def test_sensitive_fill_pauses_then_executes_after_explicit_confirmation():
     browser = FakeBrowser()
     runtime = DefaultToolRuntime(create_browser_tool_registry(), ToolContext(browser=browser))
-
-    result = asyncio.run(
-        runtime.execute(
-            ToolRequest(
-                name="browser.fill",
-                arguments={"element_id": "field_123", "value": "private value"},
-            )
-        )
+    request = ToolRequest(
+        name="browser.fill",
+        arguments={"element_id": "field_123", "value": "private value"},
     )
 
+    paused = asyncio.run(runtime.execute(request))
+    confirmation_id = paused.data["confirmation"]["confirmation_id"]
+
+    assert paused.status is ToolExecutionStatus.PAUSED
+    assert paused.failure_kind is ToolFailureKind.SECURITY
+    assert paused.error_code == "security_confirmation_required"
+    assert "Требуется подтверждение" in paused.message
+    assert browser.actions == []
+    assert runtime.history[-1].arguments == {
+        "element_id": "field_123",
+        "value": "[REDACTED]",
+    }
+
+    assert runtime.confirm_pending_action(confirmation_id) is True
+    result = asyncio.run(runtime.execute(request))
     assert result.success is True
     assert browser.actions == [("fill", "field_123", "private value")]
     assert runtime.history[-1].arguments == {
@@ -151,6 +162,75 @@ def test_observe_tool_returns_llm_safe_observation():
     assert observation["summary"] == "Synthetic observation."
     assert "html" not in str(observation).lower()
     assert "dom" not in str(observation).lower()
+
+
+def test_submit_click_pauses_before_browser_action():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(
+            browser=browser,
+            observation_engine=FakeObservationEngine("el_submit", "Submit application"),
+        ),
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(name="browser.click", arguments={"element_id": "el_submit"})
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.PAUSED
+    assert result.failure_kind is ToolFailureKind.SECURITY
+    assert result.data["security"]["risk"] == ActionRisk.EXTERNAL_SIDE_EFFECT.value
+    assert result.data["confirmation"]["tool_name"] == "browser.click"
+    assert browser.actions == []
+
+
+def test_destructive_click_requires_confirmation_before_browser_action():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(
+            browser=browser,
+            observation_engine=FakeObservationEngine("el_delete", "Delete account"),
+        ),
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(name="browser.click", arguments={"element_id": "el_delete"})
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.PAUSED
+    assert result.data["security"]["risk"] == ActionRisk.DESTRUCTIVE.value
+    assert browser.actions == []
+
+
+def test_llm_supplied_safe_risk_cannot_bypass_security():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(
+            browser=browser,
+            observation_engine=FakeObservationEngine("el_send", "Send message"),
+        ),
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(
+                name="browser.click",
+                arguments={"element_id": "el_send"},
+                risk=ActionRisk.SAFE,
+            )
+        )
+    )
+
+    assert result.status is ToolExecutionStatus.PAUSED
+    assert result.data["security"]["risk"] == ActionRisk.EXTERNAL_SIDE_EFFECT.value
+    assert browser.actions == []
 
 
 class FakeBrowser:
@@ -216,11 +296,26 @@ class FakeBrowser:
 
 
 class FakeObservationEngine:
+    def __init__(self, element_id: str | None = None, label: str | None = None):
+        self.element_id = element_id
+        self.label = label
+
     async def observe(self):
+        elements = []
+        if self.element_id and self.label:
+            elements.append(
+                InteractiveElement(
+                    element_id=self.element_id,
+                    role="button",
+                    accessible_name=self.label,
+                    visible_text=self.label,
+                )
+            )
         return PageObservation(
             url="https://example.test",
             title="Fake",
             summary="Synthetic observation.",
+            interactive_elements=elements,
         )
 
 

@@ -10,6 +10,14 @@ from time import perf_counter
 from typing import Awaitable, Callable, Protocol
 
 from scout_pilot.models import ToolRequest
+from scout_pilot.security import (
+    DeterministicSecurityPolicy,
+    SecurityConfirmationRequest,
+    SecurityDecision,
+    SecurityEvaluationContext,
+    SecurityPolicy,
+    build_security_request_signature,
+)
 from scout_pilot.tools.base import BaseTool, ToolContext
 from scout_pilot.tools.registry import ToolRegistry
 from scout_pilot.tools.types import (
@@ -47,17 +55,43 @@ class DefaultToolRuntime:
         registry: ToolRegistry,
         context: ToolContext,
         pre_execution_hook: PreExecutionHook | None = None,
+        security_policy: SecurityPolicy | None = None,
         history_limit: int = 100,
     ) -> None:
         self._registry = registry
         self._context = context
         self._pre_execution_hook = pre_execution_hook
+        self._security_policy = security_policy or DeterministicSecurityPolicy()
         self._history_limit = history_limit
         self._history: list[ToolHistoryEntry] = []
+        self._pending_confirmations: dict[str, SecurityConfirmationRequest] = {}
+        self._confirmed_signatures: set[str] = set()
 
     @property
     def history(self) -> tuple[ToolHistoryEntry, ...]:
         return tuple(self._history)
+
+    @property
+    def pending_confirmations(self) -> tuple[SecurityConfirmationRequest, ...]:
+        return tuple(self._pending_confirmations.values())
+
+    @property
+    def security_audit_trail(self):
+        return tuple(getattr(self._security_policy, "audit_trail", ()))
+
+    def confirm_pending_action(self, confirmation_id: str) -> bool:
+        """Allow one exact pending request after explicit user confirmation."""
+
+        confirmation = self._pending_confirmations.pop(confirmation_id, None)
+        if confirmation is None:
+            return False
+        self._confirmed_signatures.add(confirmation.request_signature)
+        return True
+
+    def reject_pending_action(self, confirmation_id: str) -> bool:
+        """Discard a pending request without allowing execution."""
+
+        return self._pending_confirmations.pop(confirmation_id, None) is not None
 
     async def execute(self, request: ToolRequest) -> ToolExecutionResult:
         started_at = datetime.now(tz=timezone.utc)
@@ -98,24 +132,25 @@ class DefaultToolRuntime:
         validated_input = dict(validation.values)
         decision = await self._run_pre_execution_hook(request, tool, validated_input)
         if decision.status is not PreExecutionStatus.ALLOW:
-            status = (
-                ToolExecutionStatus.BLOCKED
-                if decision.status is PreExecutionStatus.BLOCK
-                else ToolExecutionStatus.PAUSED
-            )
-            result = _result(
+            return self._decision_result(
                 request.name,
-                status,
-                False,
-                decision.reason or "Tool execution was not allowed.",
+                validated_input,
+                tool,
+                decision,
                 started_at,
                 started,
-                failure_kind=ToolFailureKind.SECURITY,
-                retryable=decision.status is PreExecutionStatus.PAUSE,
             )
-            self._log("tool_execution_blocked", request.name, result)
-            self._record_history(request.name, validated_input, tool, result)
-            return result
+
+        decision = await self._run_security_policy(request, tool, validated_input)
+        if decision.status is not PreExecutionStatus.ALLOW:
+            return self._decision_result(
+                request.name,
+                validated_input,
+                tool,
+                decision,
+                started_at,
+                started,
+            )
 
         self._log("tool_execution_started", request.name)
         try:
@@ -171,6 +206,98 @@ class DefaultToolRuntime:
             return await decision
         return decision
 
+    async def _run_security_policy(
+        self,
+        request: ToolRequest,
+        tool: BaseTool,
+        validated_input: dict[str, object],
+    ) -> PreExecutionDecision:
+        sanitized_request = ToolRequest(name=request.name, arguments=validated_input)
+        signature = build_security_request_signature(
+            sanitized_request.name,
+            sanitized_request.arguments,
+        )
+        observation = await self._security_observation(sanitized_request.name)
+        decision = self._security_policy.evaluate(
+            sanitized_request,
+            SecurityEvaluationContext(
+                tool_description=tool.description,
+                validated_arguments=validated_input,
+                observation=observation,
+                sensitive_fields=frozenset(tool.input_schema.sensitive_field_names()),
+                is_confirmed=signature in self._confirmed_signatures,
+            ),
+        )
+        if decision.allowed:
+            self._confirmed_signatures.discard(signature)
+            self._log_security_decision("security_decision_allowed", request.name, decision)
+            return PreExecutionDecision.allow()
+        data = _security_decision_data(decision)
+        if decision.confirmation is not None:
+            self._pending_confirmations[decision.confirmation.confirmation_id] = (
+                decision.confirmation
+            )
+        self._log_security_decision("security_decision_blocked", request.name, decision)
+        if decision.requires_confirmation:
+            return PreExecutionDecision.pause(
+                decision.confirmation.message_ru if decision.confirmation else decision.reason,
+                data=data,
+                error_code="security_confirmation_required",
+            )
+        return PreExecutionDecision.block(
+            decision.reason,
+            data=data,
+            error_code="security_blocked",
+        )
+
+    async def _security_observation(self, tool_name: str):
+        if tool_name not in {"browser.click", "browser.fill", "browser.press_key"}:
+            return None
+        if self._context.observation_engine is None:
+            return None
+        try:
+            return await self._context.observation_engine.observe()
+        except Exception as exc:  # pragma: no cover - defensive integration boundary
+            logger.info(
+                "security_observation_failed",
+                extra={
+                    "event": "security_observation_failed",
+                    "tool_name": tool_name,
+                    "error": str(exc),
+                },
+            )
+            return None
+
+    def _decision_result(
+        self,
+        tool_name: str,
+        validated_input: dict[str, object],
+        tool: BaseTool,
+        decision: PreExecutionDecision,
+        started_at: datetime,
+        started: float,
+    ) -> ToolExecutionResult:
+        status = (
+            ToolExecutionStatus.BLOCKED
+            if decision.status is PreExecutionStatus.BLOCK
+            else ToolExecutionStatus.PAUSED
+        )
+        result = _result(
+            tool_name,
+            status,
+            False,
+            decision.reason or "Tool execution was not allowed.",
+            started_at,
+            started,
+            data=dict(decision.data),
+            failure_kind=ToolFailureKind.SECURITY,
+            retryable=decision.status is PreExecutionStatus.PAUSE,
+            error_code=decision.error_code,
+        )
+        self._log("tool_execution_blocked", tool_name, result)
+        self._record_history(tool_name, validated_input, tool, result)
+        return result
+
     def _record_history(
         self,
         tool_name: str,
@@ -206,6 +333,25 @@ class DefaultToolRuntime:
                 }
             )
         logger.info(event, extra=extra)
+
+    @staticmethod
+    def _log_security_decision(
+        event: str,
+        tool_name: str,
+        decision: SecurityDecision,
+    ) -> None:
+        logger.info(
+            event,
+            extra={
+                "event": event,
+                "tool_name": tool_name,
+                "risk": decision.risk.value,
+                "allowed": decision.allowed,
+                "requires_confirmation": decision.requires_confirmation,
+                "blocked": decision.blocked,
+                "audit_id": decision.audit_id,
+            },
+        )
 
 
 def _result_from_outcome(
@@ -267,6 +413,20 @@ def _result(
         finished_at=finished_at,
         duration_ms=(perf_counter() - started) * 1000,
     )
+
+
+def _security_decision_data(decision: SecurityDecision) -> dict[str, object]:
+    return {
+        "security": {
+            "risk": decision.risk.value,
+            "reason": decision.reason,
+            "audit_id": decision.audit_id,
+            "classification": dict(decision.classification.to_dict()),
+        },
+        "confirmation": (
+            dict(decision.confirmation.to_dict()) if decision.confirmation is not None else None
+        ),
+    }
 
 
 def _redact_arguments(arguments: object, tool: BaseTool | None) -> dict[str, object]:

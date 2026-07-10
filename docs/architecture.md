@@ -15,7 +15,7 @@ Scout Pilot строится как набор независимых слоев
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует observe-think-plan-act-evaluate loop, state machine, memory, tool execution, progress, cancellation и explicit termination. |
 | Execution Intelligence | `scout_pilot.intelligence` | Оценивает tool outcomes, прогресс, no-op действия, повторные ошибки, валидность плана и необходимость retry/replan/confirmation/stop. |
 | Context Budgeting and Compression | `scout_pilot.context` | Оценивает model input size, резервирует output tokens, сжимает observations/memory, удаляет повторяющийся boilerplate и отдает прозрачные before/after metrics для runtime/debug. |
-| Independent Security Policy Layer | `scout_pilot.security` | Классифицирует действия и требует подтверждение до внешних эффектов. |
+| Independent Security Policy Layer | `scout_pilot.security` | Детерминированно классифицирует tool requests как `safe`, `sensitive`, `destructive` или `external_side_effect`, требует подтверждение на русском и ведет audit trail. |
 | CLI/user interface | `scout_pilot.cli` | Показывает пользователю прогресс, предупреждения, ошибки и подтверждения на русском. |
 | Reporting and replay | `scout_pilot.reporting` | Формирует отчеты и поддерживает безопасное воспроизведение сценариев. |
 
@@ -24,7 +24,9 @@ Scout Pilot строится как набор независимых слоев
 - Реализация Playwright не должна выходить за пределы Browser Engine.
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
 - Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
-- Tool Runtime имеет pre-execution hook для будущего Security Policy Layer и не содержит provider-specific schema adapters.
+- Tool Runtime запускает deterministic Security Policy перед `tool.execute()` и не содержит provider-specific schema adapters.
+- LLM не может пометить действие как безопасное: `ToolRequest.risk` и аргументы модели не используются как источник доверия для security decision.
+- Sensitive, destructive и external-side-effect actions возвращают paused result с confirmation request; выполнение продолжается только после явного подтверждения exact request.
 - Провайдеры LLM и SDK imports не должны выходить за пределы `scout_pilot.llm`.
 - Reasoning Engine получает только user task, compact observation, memory summaries, tool schemas, constraints и budget.
 - Все model-facing запросы в Reasoning Engine и Planning Engine проходят через `DeterministicContextBudgeter`; raw HTML, DOM dumps, cookies, tokens, browser profiles и private files не попадают в payload.
@@ -38,6 +40,7 @@ Scout Pilot строится как набор независимых слоев
 - Autonomous Agent Runtime не импортирует Playwright или provider SDKs; browser actions проходят только через Tool Runtime, reasoning — только через provider-neutral Reasoning Engine.
 - Runtime state transitions всегда имеют machine-readable reason и пишутся во внутренний structured log на английском.
 - Runtime events содержат `message_key`, чтобы пользовательский интерфейс мог локализовать progress и ошибки на русский.
+- Runtime не продолжает автоматически после confirmation-required action: подтверждение только разрешает один следующий exact tool request.
 - Execution Intelligence получает только compact observations, provider-neutral tool results и plan state; он не обращается к Playwright, provider SDKs, raw HTML, cookies или browser profiles.
 - Reflection summaries сохраняются в memory как компактные episodic summaries, а не как raw traces.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
@@ -65,5 +68,4 @@ Autonomous Agent Runtime выполняет задачу как bounded loop:
 
 ## Будущие этапы
 
-1. Security Policy Layer подключится к pre-execution hook перед чувствительными действиями.
-2. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
+1. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.

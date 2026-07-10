@@ -84,6 +84,7 @@ class AgentTaskResult:
     iterations: int = 0
     failures: int = 0
     plan: ExecutionPlan | None = None
+    confirmation_request: Mapping[str, object] | None = None
 
     @property
     def is_terminal(self) -> bool:

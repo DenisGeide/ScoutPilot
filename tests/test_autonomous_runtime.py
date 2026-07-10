@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+from scout_pilot.browser.types import BrowserActionResult
 from scout_pilot.llm import (
     LlmProviderResponse,
     LlmProviderResult,
@@ -12,6 +13,7 @@ from scout_pilot.llm import (
 from scout_pilot.memory import HierarchicalMemory
 from scout_pilot.models import (
     ExecutionPlan,
+    InteractiveElement,
     PageObservation,
     PlanStep,
     RuntimeStatus,
@@ -265,6 +267,55 @@ def test_runtime_waits_for_confirmation_when_reasoning_requests_it():
     assert events[-1].name == "confirmation_required"
 
 
+def test_runtime_pauses_and_resumes_security_confirmation():
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("browser.click", {"element_id": "el_submit"}),
+            _tool_call_result("browser.click", {"element_id": "el_submit"}),
+            _text_result("Done after confirmation."),
+        ]
+    )
+    browser = SecurityFakeBrowser()
+    observer = SecurityObservationEngine(browser)
+    registry = create_browser_tool_registry()
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observer,
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(
+            tool_request=ToolRequest(
+                name="browser.click",
+                arguments={"element_id": "el_submit"},
+            )
+        ),
+        tool_runtime=DefaultToolRuntime(
+            registry,
+            ToolContext(browser=browser, observation_engine=observer),
+        ),
+        memory=HierarchicalMemory(),
+        tool_schemas=registry.schemas(),
+        settings=RuntimeSettings(max_iterations=3, max_failures=1),
+    )
+
+    paused_events = asyncio.run(_collect(runtime.run(UserTask("Submit the form"))))
+    confirmation = runtime.pending_confirmation
+    confirmation_id = confirmation["confirmation_id"]
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.final_state is AgentState.WAITING_FOR_CONFIRMATION
+    assert paused_events[-1].name == "confirmation_required"
+    assert "Требуется подтверждение" in runtime.last_result.message
+    assert browser.actions == []
+
+    assert runtime.confirm_pending_action(str(confirmation_id)) is True
+    resumed_events = asyncio.run(_collect(runtime.run(UserTask("Submit the form"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Done after confirmation."
+    assert browser.actions == [("click", "el_submit")]
+    assert resumed_events[-1].status is RuntimeStatus.COMPLETED
+
+
 def test_runtime_cancels_cleanly_before_actions():
     provider = MockLlmProvider([_text_result("Done.")])
     tool_runtime = FakeToolRuntime([])
@@ -458,6 +509,42 @@ class StaticObservationEngine:
             url="https://example.test/same",
             title="Same",
             summary="Same semantic state.",
+        )
+
+
+class SecurityFakeBrowser:
+    def __init__(self):
+        self.actions = []
+
+    async def click_by_semantic_id(self, element_id):
+        self.actions.append(("click", element_id))
+        return BrowserActionResult(
+            action="click_by_semantic_id",
+            success=True,
+            message="Clicked.",
+            url="https://example.test",
+            title="After click",
+        )
+
+
+class SecurityObservationEngine:
+    def __init__(self, browser):
+        self.browser = browser
+
+    async def observe(self):
+        clicked = bool(self.browser.actions)
+        return PageObservation(
+            url="https://example.test",
+            title="After click" if clicked else "Before click",
+            summary="Submitted." if clicked else "Form ready.",
+            interactive_elements=[
+                InteractiveElement(
+                    element_id="el_submit",
+                    role="button",
+                    accessible_name="Submit form",
+                    visible_text="Submit form",
+                )
+            ],
         )
 
 

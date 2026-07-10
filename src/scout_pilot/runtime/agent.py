@@ -89,6 +89,7 @@ class AutonomousAgentRuntime:
         self._state = AgentState.IDLE
         self._cancel_requested = False
         self._cancel_reason = "Cancelled by user."
+        self._pending_confirmation: Mapping[str, object] | None = None
         self.last_result: AgentTaskResult | None = None
 
     @property
@@ -100,6 +101,33 @@ class AutonomousAgentRuntime:
 
         self._cancel_requested = True
         self._cancel_reason = reason
+
+    @property
+    def pending_confirmation(self) -> Mapping[str, object] | None:
+        return self._pending_confirmation
+
+    def confirm_pending_action(self, confirmation_id: str) -> bool:
+        """Confirm one paused tool action without executing it automatically."""
+
+        confirmer = getattr(self._tool_runtime, "confirm_pending_action", None)
+        if not callable(confirmer):
+            return False
+        confirmed = bool(confirmer(confirmation_id))
+        if confirmed:
+            self._pending_confirmation = None
+        return confirmed
+
+    def reject_pending_action(self, confirmation_id: str) -> bool:
+        """Reject one paused tool action."""
+
+        rejecter = getattr(self._tool_runtime, "reject_pending_action", None)
+        if not callable(rejecter):
+            return False
+        rejected = bool(rejecter(confirmation_id))
+        if rejected and self._pending_confirmation:
+            if self._pending_confirmation.get("confirmation_id") == confirmation_id:
+                self._pending_confirmation = None
+        return rejected
 
     async def run(self, task: UserTask) -> AsyncIterator[RuntimeEvent]:
         """Run one task and stream deterministic runtime events."""
@@ -343,6 +371,27 @@ class AutonomousAgentRuntime:
                         "error_code": tool_result.error_code,
                     },
                 )
+
+                if tool_result.status is ToolExecutionStatus.PAUSED:
+                    confirmation_request = _confirmation_from_tool_result(tool_result)
+                    result = await self._wait_for_confirmation(
+                        task_id,
+                        task,
+                        progress,
+                        plan,
+                        tool_result.message,
+                        confirmation_request=confirmation_request,
+                    )
+                    self.last_result = result
+                    yield self._event(
+                        "confirmation_required",
+                        RuntimeStatus.WAITING_FOR_CONFIRMATION,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.confirmation.required",
+                        details=_result_details(result),
+                    )
+                    return
 
                 yield self._transition(
                     AgentState.EVALUATING,
@@ -706,7 +755,9 @@ class AutonomousAgentRuntime:
         progress: AgentProgress,
         plan: ExecutionPlan | None,
         message: str,
+        confirmation_request: Mapping[str, object] | None = None,
     ) -> AgentTaskResult:
+        self._pending_confirmation = confirmation_request
         result = AgentTaskResult(
             task_id=task_id,
             task=task,
@@ -718,6 +769,7 @@ class AutonomousAgentRuntime:
             iterations=progress.iteration,
             failures=progress.failure_count,
             plan=plan,
+            confirmation_request=confirmation_request,
         )
         self._set_state(
             AgentState.WAITING_FOR_CONFIRMATION,
@@ -1083,7 +1135,7 @@ def _runtime_status_for_state(state: AgentState) -> RuntimeStatus:
 
 
 def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
-    return {
+    details = {
         "success": result.success,
         "termination_reason": result.termination_reason.value,
         "message": result.message,
@@ -1091,6 +1143,9 @@ def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
         "iterations": result.iterations,
         "failures": result.failures,
     }
+    if result.confirmation_request is not None:
+        details["confirmation_request"] = dict(result.confirmation_request)
+    return details
 
 
 def _evaluation_details(evaluation: StepEvaluation) -> Mapping[str, object]:
@@ -1106,3 +1161,12 @@ def _evaluation_details(evaluation: StepEvaluation) -> Mapping[str, object]:
         "metrics": dict(evaluation.metrics.to_dict()),
         "reflection_summary": evaluation.reflection_summary,
     }
+
+
+def _confirmation_from_tool_result(
+    result: ToolExecutionResult,
+) -> Mapping[str, object] | None:
+    confirmation = result.data.get("confirmation")
+    if isinstance(confirmation, Mapping):
+        return dict(confirmation)
+    return None

@@ -196,18 +196,40 @@ class PreExecutionDecision:
 
     status: PreExecutionStatus
     reason: str = ""
+    data: Mapping[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
 
     @classmethod
     def allow(cls) -> "PreExecutionDecision":
         return cls(status=PreExecutionStatus.ALLOW)
 
     @classmethod
-    def block(cls, reason: str) -> "PreExecutionDecision":
-        return cls(status=PreExecutionStatus.BLOCK, reason=reason)
+    def block(
+        cls,
+        reason: str,
+        data: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> "PreExecutionDecision":
+        return cls(
+            status=PreExecutionStatus.BLOCK,
+            reason=reason,
+            data=dict(data or {}),
+            error_code=error_code,
+        )
 
     @classmethod
-    def pause(cls, reason: str) -> "PreExecutionDecision":
-        return cls(status=PreExecutionStatus.PAUSE, reason=reason)
+    def pause(
+        cls,
+        reason: str,
+        data: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> "PreExecutionDecision":
+        return cls(
+            status=PreExecutionStatus.PAUSE,
+            reason=reason,
+            data=dict(data or {}),
+            error_code=error_code,
+        )
 
 
 def _validate_field(

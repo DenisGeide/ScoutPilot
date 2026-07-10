@@ -28,6 +28,9 @@
 - Любой model-facing payload для Reasoning Engine или Planning Engine должен проходить через `DeterministicContextBudgeter`.
 - Context Budgeting должен сохранять user goal, constraints, confirmation choices, security warnings и recent failures, а repeated navigation/header/footer, stale observations и boilerplate отбрасывать первыми.
 - Метрики `before_tokens`/`after_tokens` и признаки emergency compression нужны для runtime/debug events; raw HTML или DOM dumps нельзя отправлять в LLM ради "лучшего" сжатия.
+- Security Policy должен выполняться перед каждым `tool.execute()` и не должен доверять LLM-provided `risk`, prompt-инструкциям или аргументам вроде `safe=true`.
+- Confirmation-required action возвращает paused result и русское сообщение; runtime не продолжает автоматически, а разрешает только один exact request после явного подтверждения.
+- Security audit trail хранит классификацию, outcome и confirmation id, но не должен раскрывать значения чувствительных полей.
 - Не использовать live HH.ru в автоматических тестах.
 - Не хранить секреты, cookies, session state, приватные скриншоты и временные отчеты в репозитории.
 - Добавлять тесты пропорционально риску изменения.
