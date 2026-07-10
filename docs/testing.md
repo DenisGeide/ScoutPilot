@@ -39,6 +39,12 @@ Browser Engine:
 scout-pilot browser-smoke --headless --hold-seconds 0
 ```
 
+Interview demo без живого сайта:
+
+```powershell
+scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
+```
+
 Демо без живого сайта:
 
 ```powershell

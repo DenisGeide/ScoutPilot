@@ -78,6 +78,12 @@ scout-pilot interactive --dry-run
 scout-pilot browser-smoke --headless --hold-seconds 0
 ```
 
+Локальное interview demo:
+
+```powershell
+scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
+```
+
 Ручной HH.ru smoke описан отдельно: [hh_demo.md](hh_demo.md).
 
 ## Где появляются локальные артефакты

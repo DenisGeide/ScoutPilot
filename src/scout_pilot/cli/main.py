@@ -130,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Куда сохранить JSON-отчет. По умолчанию используется reports/tmp.",
     )
     demo_parser.add_argument(
+        "--replay-path",
+        help="Куда сохранить JSON replay. По умолчанию используется reports/tmp.",
+    )
+    demo_parser.add_argument(
         "--headless",
         action="store_true",
         help="Запустить браузер без видимого окна.",
@@ -153,6 +157,60 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-security",
         action="store_true",
         help="Проверить, что отклик/сообщение останавливается на подтверждении.",
+    )
+
+    interview_parser = subparsers.add_parser(
+        "interview-demo",
+        help="Запустить локальное interview demo на deterministic synthetic pages.",
+    )
+    interview_parser.add_argument(
+        "--query",
+        default="AI Engineer Python AI Developer",
+        help="Поисковый запрос для локального демо.",
+    )
+    interview_parser.add_argument(
+        "--max-vacancies",
+        type=int,
+        default=3,
+        help="Сколько найденных страниц прочитать.",
+    )
+    interview_parser.add_argument(
+        "--site-dir",
+        help="Куда сгенерировать synthetic site. По умолчанию reports/tmp/interview-demo-site.",
+    )
+    interview_parser.add_argument(
+        "--profile-dir",
+        help="Persistent browser profile для демо. По умолчанию .browser-profiles/interview-demo.",
+    )
+    interview_parser.add_argument(
+        "--report-path",
+        help="Куда сохранить JSON-отчет. По умолчанию reports/tmp/interview-demo-report.json.",
+    )
+    interview_parser.add_argument(
+        "--replay-path",
+        help="Куда сохранить JSON replay. По умолчанию reports/tmp/interview-demo-replay.json.",
+    )
+    interview_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить локальное demo без видимого окна.",
+    )
+    interview_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно запустить видимое окно браузера. Это режим по умолчанию.",
+    )
+    interview_parser.add_argument(
+        "--slow-mo-ms",
+        type=int,
+        default=80,
+        help="Небольшая задержка browser actions для записи видео.",
+    )
+    interview_parser.add_argument(
+        "--wait-after-search-ms",
+        type=int,
+        default=200,
+        help="Сколько миллисекунд ждать после запуска поиска на synthetic page.",
     )
     return parser
 
@@ -179,6 +237,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "demo-vacancy-search":
         return asyncio.run(_run_vacancy_demo(args))
 
+    if args.command == "interview-demo":
+        return asyncio.run(_run_interview_demo(args))
+
     parser.print_help()
     return 0
 
@@ -195,6 +256,7 @@ def _print_status(config: AppConfig) -> None:
         "Демо поиска вакансий запускается командой demo-vacancy-search с URL, который "
         "передает пользователь. Live LLM-вызовы из CLI пока не включены."
     )
+    print("Локальное interview demo доступно через scout-pilot interview-demo.")
     print("Single-task CLI доступен через scout-pilot run \"текст задачи\" --dry-run.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
@@ -314,11 +376,17 @@ async def _run_vacancy_demo(args: argparse.Namespace) -> int:
         if args.report_path
         else config.reports_dir / "tmp" / "demo-vacancy-search-report.json"
     )
+    replay_path = (
+        Path(args.replay_path)
+        if args.replay_path
+        else config.reports_dir / "tmp" / "demo-vacancy-search-replay.json"
+    )
     demo_settings = VacancySearchDemoSettings(
         start_url=args.start_url,
         query=args.query,
         max_vacancies=args.max_vacancies,
         report_path=report_path,
+        replay_path=replay_path,
         confirm_search_fill=args.confirm_search_fill,
         confirm_search_submit=args.confirm_search_submit,
         probe_security=args.probe_security,
@@ -342,10 +410,54 @@ async def _run_vacancy_demo(args: argparse.Namespace) -> int:
     result = await runner.run(demo_settings, progress=print)
     print(result.message_ru)
     print(f"Отчет сохранен: {result.report_path}")
+    if result.replay_path is not None:
+        print(f"Replay сохранен: {result.replay_path}")
     if result.success:
         return 0
     if result.stop_reason == "confirmation_required":
         return 2
+    return 1
+
+
+async def _run_interview_demo(args: argparse.Namespace) -> int:
+    from scout_pilot.demo import InterviewDemoSettings, run_local_interview_demo
+
+    config = AppConfig.load()
+    settings = InterviewDemoSettings(
+        site_dir=Path(args.site_dir) if args.site_dir else Path("reports/tmp/interview-demo-site"),
+        profile_dir=(
+            Path(args.profile_dir)
+            if args.profile_dir
+            else Path(".browser-profiles/interview-demo")
+        ),
+        report_path=(
+            Path(args.report_path)
+            if args.report_path
+            else Path("reports/tmp/interview-demo-report.json")
+        ),
+        replay_path=(
+            Path(args.replay_path)
+            if args.replay_path
+            else Path("reports/tmp/interview-demo-replay.json")
+        ),
+        query=args.query,
+        max_vacancies=args.max_vacancies,
+        headless=True if args.headless else False,
+        slow_mo_ms=args.slow_mo_ms,
+        wait_after_search_ms=args.wait_after_search_ms,
+    )
+    if args.headed:
+        settings = replace(settings, headless=False)
+
+    result = await run_local_interview_demo(config, settings, progress=print)
+    print(result.message_ru)
+    print(f"Отчет сохранен: {result.report_path}")
+    print(f"Replay сохранен: {result.replay_path}")
+    print(f"Прочитано страниц: {result.notes_count}. Пауз безопасности: {result.security_pause_count}.")
+    if result.success:
+        print("Локальное interview demo завершено. Реальные отклики и сообщения не отправлялись.")
+        return 0
+    print("Демо остановилось честно. Проверьте отчет и replay для причины остановки.")
     return 1
 
 

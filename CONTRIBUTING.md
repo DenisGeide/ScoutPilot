@@ -55,5 +55,6 @@ git status --short
 - установка и конфигурация: [docs/setup.md](docs/setup.md);
 - архитектурные границы: [docs/architecture.md](docs/architecture.md);
 - тестирование: [docs/testing.md](docs/testing.md);
+- interview demo: [docs/interview_demo.md](docs/interview_demo.md);
 - ручной HH.ru smoke: [docs/hh_demo.md](docs/hh_demo.md);
 - правила разработки: [docs/development.md](docs/development.md).

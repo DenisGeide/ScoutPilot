@@ -2,7 +2,7 @@
 
 Этот сценарий проверяет, что generic Browser Agent может пройти реалистичный поиск вакансий на HH.ru без hardcoded маршрутов, CSS selectors, XPath или workflow под конкретный сайт.
 
-Автоматические тесты не ходят на HH.ru. Для них используются synthetic pages из `tests/test_demo_vacancy_search.py`.
+Автоматические тесты не ходят на HH.ru. Для них используются synthetic pages из `tests/test_demo_vacancy_search.py`, а для записи короткого видео удобнее начать с локального [interview demo](interview_demo.md).
 
 ## Перед запуском
 
@@ -30,7 +30,8 @@ scout-pilot demo-vacancy-search `
   --max-vacancies 3 `
   --headed `
   --confirm-search-fill `
-  --report-path reports/tmp/hh-demo-report.json
+  --report-path reports/tmp/hh-demo-report.json `
+  --replay-path reports/tmp/hh-demo-replay.json
 ```
 
 Команда должна:
@@ -55,7 +56,8 @@ scout-pilot demo-vacancy-search `
   --headed `
   --confirm-search-fill `
   --confirm-search-submit `
-  --report-path reports/tmp/hh-demo-report.json
+  --report-path reports/tmp/hh-demo-report.json `
+  --replay-path reports/tmp/hh-demo-replay.json
 ```
 
 `--confirm-search-submit` разрешает только запуск поиска. Он не подтверждает отклики, сообщения, отправку заявок или загрузку файлов.

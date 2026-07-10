@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scout_pilot.reporting.runtime_report import sanitize_for_report
+
 
 class DemoReportRecorder:
     """Collect a bounded, HTML-free report for a demonstration run."""
@@ -20,6 +22,8 @@ class DemoReportRecorder:
         start_url: str,
     ) -> None:
         self._payload: dict[str, Any] = {
+            "schema_version": 1,
+            "artifact_kind": "demo_report",
             "demo_name": demo_name,
             "task": task,
             "start_url": start_url,
@@ -64,7 +68,27 @@ class DemoReportRecorder:
         self._payload["final_summary_ru"] = summary_ru
 
     def to_dict(self) -> Mapping[str, Any]:
-        return _json_safe(self._payload)
+        payload = dict(self._payload)
+        payload["summary"] = _summarize_payload(payload)
+        return _json_safe(payload)
+
+    def to_replay_dict(self) -> Mapping[str, Any]:
+        payload = {
+            "schema_version": 1,
+            "artifact_kind": "demo_replay",
+            "demo_name": self._payload["demo_name"],
+            "task": self._payload["task"],
+            "start_url": self._payload["start_url"],
+            "generated_at": self._payload["generated_at"],
+            "events": self._payload["events"],
+            "notes": self._payload["notes"],
+            "security_pauses": self._payload["security_pauses"],
+            "final_summary_ru": self._payload["final_summary_ru"],
+            "stop_reason": self._payload["stop_reason"],
+            "success": self._payload["success"],
+            "summary": _summarize_payload(self._payload),
+        }
+        return _json_safe(payload)
 
     def write(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,18 +98,44 @@ class DemoReportRecorder:
         )
         return path
 
+    def write_replay(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.to_replay_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return path
+
 
 def _json_safe(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, Path):
-        return str(value)
-    if hasattr(value, "value") and not isinstance(value, str):
-        return value.value
-    if isinstance(value, str | int | float | bool) or value is None:
-        return value
-    return str(value)
+    return sanitize_for_report(value)
+
+
+def _summarize_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    events = payload.get("events", [])
+    if not isinstance(events, list):
+        events = []
+    event_kinds = [
+        str(event.get("kind"))
+        for event in events
+        if isinstance(event, Mapping) and event.get("kind")
+    ]
+    selected_tools = [
+        str(event.get("tool_name"))
+        for event in events
+        if isinstance(event, Mapping)
+        and event.get("kind") == "selected_tool"
+        and event.get("tool_name")
+    ]
+    return {
+        "observation_count": event_kinds.count("observation"),
+        "decision_count": event_kinds.count("decision"),
+        "selected_tools": list(dict.fromkeys(selected_tools)),
+        "tool_decision_count": event_kinds.count("selected_tool"),
+        "tool_result_count": event_kinds.count("tool_result")
+        + event_kinds.count("tool_result_after_confirmation"),
+        "security_pause_count": len(payload.get("security_pauses", [])),
+        "note_count": len(payload.get("notes", [])),
+        "context_budget_events": event_kinds.count("context_budget"),
+        "stopped_before_side_effects": bool(payload.get("stopped_before_side_effects")),
+    }

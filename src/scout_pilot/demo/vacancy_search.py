@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from scout_pilot.browser.engine import BrowserEngine
+from scout_pilot.context import DeterministicContextBudgeter
 from scout_pilot.models import InteractiveElement, PageObservation, ToolRequest
 from scout_pilot.observation import ObservationEngine
 from scout_pilot.reporting import DemoReportRecorder
@@ -72,6 +73,7 @@ class VacancySearchDemoSettings:
     query: str = "AI Engineer Python AI Developer"
     max_vacancies: int = 3
     report_path: Path = Path("reports/tmp/demo-vacancy-search-report.json")
+    replay_path: Path | None = Path("reports/tmp/demo-vacancy-search-replay.json")
     confirm_search_fill: bool = False
     confirm_search_submit: bool = False
     probe_security: bool = False
@@ -114,6 +116,7 @@ class VacancySearchDemoResult:
     stop_reason: str
     message_ru: str
     report_path: Path
+    replay_path: Path | None
     notes: tuple[VacancyNote, ...]
     security_pauses: tuple[Mapping[str, Any], ...]
 
@@ -131,6 +134,7 @@ class VacancySearchDemoRunner:
         self._browser = browser
         self._observation_engine = observation_engine
         self._tool_runtime = tool_runtime
+        self._context_budgeter = DeterministicContextBudgeter()
 
     async def run(
         self,
@@ -176,6 +180,14 @@ class VacancySearchDemoRunner:
                 return _final_result(report, settings, notes, False, "page_not_available", message_ru)
 
             emit("Ищу поле поиска по семантическим признакам.")
+            report.record_event(
+                "decision",
+                phase="fill_search_query",
+                message=(
+                    "Resolve a generic search field by label, placeholder and accessible name; "
+                    "do not use selectors or site routes."
+                ),
+            )
             fill_request = ToolRequest(
                 "browser.fill_by_label",
                 {"label": "search", "value": settings.query},
@@ -198,6 +210,14 @@ class VacancySearchDemoRunner:
                 return _final_result(report, settings, notes, False, "search_fill_failed", message_ru)
 
             emit("Запускаю поиск через семантическую кнопку поиска.")
+            report.record_event(
+                "decision",
+                phase="run_search",
+                message=(
+                    "Use a semantic button intent for search and let Security Policy pause "
+                    "if the action looks like form submission."
+                ),
+            )
             search_result = await self._execute(
                 ToolRequest(
                     "browser.click_by_intent",
@@ -234,6 +254,14 @@ class VacancySearchDemoRunner:
                 query=settings.query,
                 limit=settings.max_vacancies,
             )
+            report.record_event(
+                "decision",
+                phase="select_candidates",
+                candidate_count=len(candidates),
+                max_requested=settings.max_vacancies,
+                retry_recommendation="not_needed" if candidates else "observe_or_replan",
+                replan_recommendation="not_needed" if candidates else "needed",
+            )
             if not candidates:
                 message_ru = (
                     "Не нашлось достаточно понятных ссылок на вакансии. "
@@ -260,6 +288,14 @@ class VacancySearchDemoRunner:
                 note = _build_vacancy_note(detail_observation, candidate)
                 notes.append(note)
                 report.record_note(note.to_dict())
+                report.record_event(
+                    "decision",
+                    phase=f"candidate_{index}_evaluation",
+                    title=note.title,
+                    progress_classification="success" if note.summary else "uncertain",
+                    retry_recommendation="not_needed" if note.summary else "observe_again",
+                    replan_recommendation="not_needed",
+                )
                 emit(f"Подготовил короткую заметку по странице {index}.")
 
                 if settings.probe_security and not security_probe_done:
@@ -347,6 +383,24 @@ class VacancySearchDemoRunner:
             phase=phase,
             observation=_observation_to_report(observation),
         )
+        budgeted = self._context_budgeter.assemble(
+            user_task=(
+                "Find up to three suitable AI Engineer or Python AI Developer "
+                "vacancy-like pages and stop before external side effects."
+            ),
+            observation=observation,
+            memory_summaries=(
+                "task.user_goal: compare up to three suitable vacancy-like pages.",
+                "constraint: stop before applying, messaging, submitting forms or uploading files.",
+                "security: confirmation is required before any external side effect.",
+            ),
+        )
+        report.record_event(
+            "context_budget",
+            phase=phase,
+            metrics=budgeted.metrics.to_dict(),
+            budget=dict(budgeted.budget),
+        )
         return observation
 
     async def _execute(
@@ -431,11 +485,13 @@ def _final_result(
 ) -> VacancySearchDemoResult:
     report.set_final(success=success, stop_reason=stop_reason, summary_ru=message_ru)
     report_path = report.write(settings.report_path)
+    replay_path = report.write_replay(settings.replay_path) if settings.replay_path else None
     return VacancySearchDemoResult(
         success=success,
         stop_reason=stop_reason,
         message_ru=message_ru,
         report_path=report_path,
+        replay_path=replay_path,
         notes=tuple(notes),
         security_pauses=report.security_pauses,
     )

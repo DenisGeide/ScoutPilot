@@ -1,3 +1,5 @@
+import json
+
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
 
@@ -32,6 +34,26 @@ def test_demo_vacancy_search_command_requires_start_url():
     assert args.start_url == "file:///tmp/example.html"
     assert args.headless is True
     assert args.confirm_search_fill is True
+
+
+def test_interview_demo_command_parses_local_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "interview-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--wait-after-search-ms",
+            "50",
+        ]
+    )
+
+    assert args.command == "interview-demo"
+    assert args.headless is True
+    assert args.slow_mo_ms == 0
+    assert args.wait_after_search_ms == 50
 
 
 def test_run_command_accepts_natural_language_task():
@@ -90,3 +112,45 @@ def test_run_command_starts_and_writes_artifacts(tmp_path, capsys):
     assert "Сухой запуск завершен" in captured.out
     assert report_path.exists()
     assert replay_path.exists()
+
+
+def test_interview_demo_runs_local_synthetic_site(tmp_path, capsys):
+    report_path = tmp_path / "interview-report.json"
+    replay_path = tmp_path / "interview-replay.json"
+
+    exit_code = main(
+        [
+            "interview-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--wait-after-search-ms",
+            "50",
+            "--site-dir",
+            str(tmp_path / "site"),
+            "--profile-dir",
+            str(tmp_path / "profile"),
+            "--report-path",
+            str(report_path),
+            "--replay-path",
+            str(replay_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+
+    assert exit_code == 0
+    assert "Локальное interview demo завершено" in captured.out
+    assert report["success"] is True
+    assert report["summary"]["observation_count"] >= 1
+    assert report["summary"]["tool_decision_count"] >= 1
+    assert report["summary"]["context_budget_events"] >= 1
+    assert report["summary"]["security_pause_count"] >= 1
+    assert replay["artifact_kind"] == "demo_replay"
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+    assert "token=" not in serialized
+    assert "cookie" not in serialized
