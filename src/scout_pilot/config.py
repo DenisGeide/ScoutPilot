@@ -39,6 +39,12 @@ class AppConfig:
     browser_default_timeout_ms: int = 10000
     browser_navigation_timeout_ms: int = 15000
     browser_screenshots_dir: Path = Path("reports/tmp/screenshots")
+    observation_max_sections: int = 12
+    observation_max_interactive_elements: int = 40
+    observation_max_form_fields: int = 25
+    observation_max_dialogs: int = 5
+    observation_max_section_chars: int = 700
+    observation_max_total_chars: int = 6000
     reports_dir: Path = Path("reports")
     llm_provider: str = "openai"
     llm_model: str = "gpt-4.1-mini"
@@ -74,6 +80,30 @@ class AppConfig:
             ),
             browser_screenshots_dir=Path(
                 values.get("SCOUT_PILOT_BROWSER_SCREENSHOTS_DIR", "reports/tmp/screenshots")
+            ),
+            observation_max_sections=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_SECTIONS", "12"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_SECTIONS",
+            ),
+            observation_max_interactive_elements=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_INTERACTIVE_ELEMENTS", "40"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_INTERACTIVE_ELEMENTS",
+            ),
+            observation_max_form_fields=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_FORM_FIELDS", "25"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_FORM_FIELDS",
+            ),
+            observation_max_dialogs=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_DIALOGS", "5"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_DIALOGS",
+            ),
+            observation_max_section_chars=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_SECTION_CHARS", "700"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_SECTION_CHARS",
+            ),
+            observation_max_total_chars=_parse_positive_int(
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_TOTAL_CHARS", "6000"),
+                variable_name="SCOUT_PILOT_OBSERVATION_MAX_TOTAL_CHARS",
             ),
             reports_dir=Path(values.get("SCOUT_PILOT_REPORTS_DIR", "reports")),
             llm_provider=values.get("SCOUT_PILOT_LLM_PROVIDER", "openai"),

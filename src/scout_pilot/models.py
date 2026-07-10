@@ -59,6 +59,125 @@ class SemanticElement:
     is_interactive: bool = False
 
 
+class PageIssueCode(str, Enum):
+    """LLM-facing page issue signals."""
+
+    LOADING = "loading"
+    EMPTY_PAGE = "empty_page"
+    BLOCKED_PAGE = "blocked_page"
+    NAVIGATION_ERROR = "navigation_error"
+    OBSERVATION_TRUNCATED = "observation_truncated"
+    OBSERVATION_ERROR = "observation_error"
+
+
+@dataclass(frozen=True)
+class PageMetadata:
+    """Page metadata that is safe to send to an LLM."""
+
+    url: str | None
+    title: str | None
+    origin: str | None
+    load_state: str
+    is_visible: bool
+    viewport_width: int | None = None
+    viewport_height: int | None = None
+
+
+@dataclass(frozen=True)
+class ElementLocation:
+    """Approximate element location relative to the visible viewport."""
+
+    region: str
+    x_ratio: float | None = None
+    y_ratio: float | None = None
+    width_ratio: float | None = None
+    height_ratio: float | None = None
+
+
+@dataclass(frozen=True)
+class ElementState:
+    """Accessible state summary for a page element."""
+
+    disabled: bool = False
+    checked: bool | None = None
+    expanded: bool | None = None
+    pressed: bool | None = None
+    selected: bool | None = None
+    required: bool = False
+    readonly: bool = False
+
+
+@dataclass(frozen=True)
+class SemanticSection:
+    """Visible content section after deduplication and compression."""
+
+    section_id: str
+    role: str
+    heading: str | None
+    text: str
+    location: ElementLocation | None = None
+
+
+@dataclass(frozen=True)
+class InteractiveElement:
+    """Visible interactive element with a generated stable ID."""
+
+    element_id: str
+    role: str
+    accessible_name: str | None
+    visible_text: str | None
+    state: ElementState = field(default_factory=ElementState)
+    location: ElementLocation | None = None
+    target_url: str | None = None
+    input_type: str | None = None
+
+
+@dataclass(frozen=True)
+class FormFieldSummary:
+    """Form field summary that never includes the field value."""
+
+    field_id: str
+    role: str
+    input_type: str | None
+    label: str | None
+    placeholder: str | None
+    value_state: str
+    state: ElementState = field(default_factory=ElementState)
+    location: ElementLocation | None = None
+    field_name: str | None = None
+
+
+@dataclass(frozen=True)
+class FocusedElementSummary:
+    """Focused element summary with sensitive values redacted."""
+
+    role: str
+    accessible_name: str | None
+    visible_text: str | None
+    input_type: str | None = None
+    value_state: str | None = None
+
+
+@dataclass(frozen=True)
+class DialogSummary:
+    """Visible dialog or modal summary."""
+
+    dialog_id: str
+    role: str
+    title: str | None
+    text: str
+    location: ElementLocation | None = None
+
+
+@dataclass(frozen=True)
+class PageIssue:
+    """Issue signal detected while observing the current page."""
+
+    code: PageIssueCode
+    message: str
+    severity: str = "info"
+
+
 @dataclass(frozen=True)
 class PageObservation:
     """LLM-facing page summary that intentionally excludes raw HTML."""
@@ -66,6 +185,14 @@ class PageObservation:
     url: str | None
     title: str | None
     summary: str
+    metadata: PageMetadata | None = None
+    sections: tuple[SemanticSection, ...] = field(default_factory=tuple)
+    interactive_elements: tuple[InteractiveElement, ...] = field(default_factory=tuple)
+    form_fields: tuple[FormFieldSummary, ...] = field(default_factory=tuple)
+    focused_element: FocusedElementSummary | None = None
+    dialogs: tuple[DialogSummary, ...] = field(default_factory=tuple)
+    issues: tuple[PageIssue, ...] = field(default_factory=tuple)
+    limits: Mapping[str, int] = field(default_factory=dict)
     elements: tuple[SemanticElement, ...] = field(default_factory=tuple)
 
     def __init__(
@@ -74,18 +201,62 @@ class PageObservation:
         title: str | None,
         summary: str,
         elements: Sequence[SemanticElement] = (),
+        metadata: PageMetadata | None = None,
+        sections: Sequence[SemanticSection] = (),
+        interactive_elements: Sequence[InteractiveElement] = (),
+        form_fields: Sequence[FormFieldSummary] = (),
+        focused_element: FocusedElementSummary | None = None,
+        dialogs: Sequence[DialogSummary] = (),
+        issues: Sequence[PageIssue] = (),
+        limits: Mapping[str, int] | None = None,
     ) -> None:
         object.__setattr__(self, "url", url)
         object.__setattr__(self, "title", title)
         object.__setattr__(self, "summary", summary)
         object.__setattr__(self, "elements", tuple(elements))
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "sections", tuple(sections))
+        object.__setattr__(self, "interactive_elements", tuple(interactive_elements))
+        object.__setattr__(self, "form_fields", tuple(form_fields))
+        object.__setattr__(self, "focused_element", focused_element)
+        object.__setattr__(self, "dialogs", tuple(dialogs))
+        object.__setattr__(self, "issues", tuple(issues))
+        object.__setattr__(self, "limits", dict(limits or {}))
 
     def to_llm_context(self) -> Mapping[str, Any]:
-        return {
+        context: dict[str, Any] = {
             "url": self.url,
             "title": self.title,
             "summary": self.summary,
-            "elements": [
+        }
+        if self.metadata is not None:
+            context["metadata"] = _metadata_to_context(self.metadata)
+        if self.sections:
+            context["sections"] = [
+                _section_to_context(section) for section in self.sections
+            ]
+        if self.interactive_elements:
+            context["interactive_elements"] = [
+                _interactive_element_to_context(element)
+                for element in self.interactive_elements
+            ]
+        if self.form_fields:
+            context["form_fields"] = [
+                _form_field_to_context(field) for field in self.form_fields
+            ]
+        if self.focused_element is not None:
+            context["focused_element"] = _focused_element_to_context(self.focused_element)
+        if self.dialogs:
+            context["dialogs"] = [_dialog_to_context(dialog) for dialog in self.dialogs]
+        if self.issues:
+            context["issues"] = [
+                {"code": issue.code.value, "message": issue.message, "severity": issue.severity}
+                for issue in self.issues
+            ]
+        if self.limits:
+            context["limits"] = dict(self.limits)
+        if self.elements:
+            context["elements"] = [
                 {
                     "role": element.role,
                     "label": element.label,
@@ -94,8 +265,101 @@ class PageObservation:
                     "is_interactive": element.is_interactive,
                 }
                 for element in self.elements
-            ],
-        }
+            ]
+        return context
+
+
+def _metadata_to_context(metadata: PageMetadata) -> Mapping[str, Any]:
+    return {
+        "url": metadata.url,
+        "title": metadata.title,
+        "origin": metadata.origin,
+        "load_state": metadata.load_state,
+        "is_visible": metadata.is_visible,
+        "viewport_width": metadata.viewport_width,
+        "viewport_height": metadata.viewport_height,
+    }
+
+
+def _location_to_context(location: ElementLocation | None) -> Mapping[str, Any] | None:
+    if location is None:
+        return None
+    return {
+        "region": location.region,
+        "x_ratio": location.x_ratio,
+        "y_ratio": location.y_ratio,
+        "width_ratio": location.width_ratio,
+        "height_ratio": location.height_ratio,
+    }
+
+
+def _state_to_context(state: ElementState) -> Mapping[str, Any]:
+    return {
+        "disabled": state.disabled,
+        "checked": state.checked,
+        "expanded": state.expanded,
+        "pressed": state.pressed,
+        "selected": state.selected,
+        "required": state.required,
+        "readonly": state.readonly,
+    }
+
+
+def _section_to_context(section: SemanticSection) -> Mapping[str, Any]:
+    return {
+        "id": section.section_id,
+        "role": section.role,
+        "heading": section.heading,
+        "text": section.text,
+        "location": _location_to_context(section.location),
+    }
+
+
+def _interactive_element_to_context(element: InteractiveElement) -> Mapping[str, Any]:
+    return {
+        "id": element.element_id,
+        "role": element.role,
+        "accessible_name": element.accessible_name,
+        "visible_text": element.visible_text,
+        "state": _state_to_context(element.state),
+        "location": _location_to_context(element.location),
+        "target_url": element.target_url,
+        "input_type": element.input_type,
+    }
+
+
+def _form_field_to_context(field: FormFieldSummary) -> Mapping[str, Any]:
+    return {
+        "id": field.field_id,
+        "role": field.role,
+        "input_type": field.input_type,
+        "label": field.label,
+        "placeholder": field.placeholder,
+        "value_state": field.value_state,
+        "state": _state_to_context(field.state),
+        "location": _location_to_context(field.location),
+        "field_name": field.field_name,
+    }
+
+
+def _focused_element_to_context(element: FocusedElementSummary) -> Mapping[str, Any]:
+    return {
+        "role": element.role,
+        "accessible_name": element.accessible_name,
+        "visible_text": element.visible_text,
+        "input_type": element.input_type,
+        "value_state": element.value_state,
+    }
+
+
+def _dialog_to_context(dialog: DialogSummary) -> Mapping[str, Any]:
+    return {
+        "id": dialog.dialog_id,
+        "role": dialog.role,
+        "title": dialog.title,
+        "text": dialog.text,
+        "location": _location_to_context(dialog.location),
+    }
 
 
 @dataclass(frozen=True)

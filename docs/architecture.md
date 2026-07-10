@@ -7,7 +7,7 @@ Scout Pilot строится как набор независимых слоев
 | Слой | Пакет | Ответственность |
 |---|---|---|
 | Browser Engine | `scout_pilot.browser` | Управляет видимым браузером, сессиями, навигацией и диагностическими скриншотами. Playwright изолирован здесь. |
-| Semantic Observation Engine | `scout_pilot.observation` | Преобразует страницу в компактное семантическое наблюдение без полного HTML. |
+| Semantic Observation Engine | `scout_pilot.observation` | Преобразует контролируемый Browser Engine snapshot в компактное семантическое наблюдение без полного HTML и значений чувствительных полей. |
 | Tool Runtime | `scout_pilot.tools` | Регистрирует и выполняет инструменты через нейтральные схемы. |
 | LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет план выполнения пользовательской задачи. |
@@ -23,14 +23,14 @@ Scout Pilot строится как набор независимых слоев
 
 - Реализация Playwright не должна выходить за пределы Browser Engine.
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
+- Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
 - Tool Runtime не должен обходить Security Policy Layer для чувствительных действий.
 - Провайдеры LLM не должны импортироваться в планировщик, память, безопасность или CLI напрямую.
 - Документация и пользовательские сообщения остаются на русском; код, идентификаторы и внутренние логи — на английском.
 
 ## Будущие этапы
 
-1. Semantic Observation Engine добавит компактные наблюдения страницы через Browser Engine.
-2. Tool Runtime и Security Policy Layer введут контролируемое выполнение действий.
-3. LLM Provider Layer подключит OpenAI или Anthropic через единый интерфейс.
-4. Runtime, Planning, Memory, Context и Intelligence объединят автономный цикл агента.
-5. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.
+1. Tool Runtime и Security Policy Layer введут контролируемое выполнение действий.
+2. LLM Provider Layer подключит OpenAI или Anthropic через единый интерфейс.
+3. Runtime, Planning, Memory, Context и Intelligence объединят автономный цикл агента.
+4. CLI, reports и replay дадут демонстрационный режим и проверяемые пользовательские артефакты.

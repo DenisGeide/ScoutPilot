@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from scout_pilot.browser.types import BrowserActionResult, BrowserState, ScreenshotResult
+from scout_pilot.browser.types import (
+    BrowserActionResult,
+    BrowserPageSnapshot,
+    BrowserState,
+    ScreenshotResult,
+)
 
 
 class BrowserSession(Protocol):
@@ -42,3 +47,6 @@ class BrowserEngine(Protocol):
 
     async def screenshot(self, path: Path | None = None) -> ScreenshotResult:
         """Capture a diagnostic screenshot without exposing page internals."""
+
+    async def capture_semantic_snapshot(self) -> BrowserPageSnapshot:
+        """Capture sanitized page data for semantic observation."""

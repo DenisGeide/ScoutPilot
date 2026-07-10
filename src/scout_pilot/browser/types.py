@@ -97,6 +97,107 @@ class ScreenshotResult:
     error_code: str | None = None
 
 
+@dataclass(frozen=True)
+class BrowserElementLocation:
+    """Viewport-relative element location captured by Browser Engine."""
+
+    region: str
+    x_ratio: float | None = None
+    y_ratio: float | None = None
+    width_ratio: float | None = None
+    height_ratio: float | None = None
+
+
+@dataclass(frozen=True)
+class BrowserElementState:
+    """Sanitized state captured from an element."""
+
+    disabled: bool = False
+    checked: bool | None = None
+    expanded: bool | None = None
+    pressed: bool | None = None
+    selected: bool | None = None
+    required: bool = False
+    readonly: bool = False
+
+
+@dataclass(frozen=True)
+class BrowserSectionSnapshot:
+    """Sanitized visible section captured from the current page."""
+
+    role: str
+    heading: str | None
+    text: str
+    location: BrowserElementLocation | None = None
+
+
+@dataclass(frozen=True)
+class BrowserInteractiveElementSnapshot:
+    """Sanitized interactive element captured from the current page."""
+
+    role: str
+    accessible_name: str | None
+    visible_text: str | None
+    state: BrowserElementState
+    location: BrowserElementLocation | None = None
+    target_url: str | None = None
+    input_type: str | None = None
+
+
+@dataclass(frozen=True)
+class BrowserFormFieldSnapshot:
+    """Sanitized form field summary without the field value."""
+
+    role: str
+    input_type: str | None
+    label: str | None
+    placeholder: str | None
+    value_state: str
+    state: BrowserElementState
+    location: BrowserElementLocation | None = None
+    field_name: str | None = None
+
+
+@dataclass(frozen=True)
+class BrowserFocusedElementSnapshot:
+    """Sanitized focused element summary."""
+
+    role: str
+    accessible_name: str | None
+    visible_text: str | None
+    input_type: str | None = None
+    value_state: str | None = None
+
+
+@dataclass(frozen=True)
+class BrowserDialogSnapshot:
+    """Sanitized visible dialog or modal summary."""
+
+    role: str
+    title: str | None
+    text: str
+    location: BrowserElementLocation | None = None
+
+
+@dataclass(frozen=True)
+class BrowserPageSnapshot:
+    """Sanitized page snapshot for the Semantic Observation Engine."""
+
+    url: str | None
+    title: str | None
+    origin: str | None
+    load_state: str
+    is_visible: bool
+    viewport_width: int | None = None
+    viewport_height: int | None = None
+    sections: tuple[BrowserSectionSnapshot, ...] = ()
+    interactive_elements: tuple[BrowserInteractiveElementSnapshot, ...] = ()
+    form_fields: tuple[BrowserFormFieldSnapshot, ...] = ()
+    focused_element: BrowserFocusedElementSnapshot | None = None
+    dialogs: tuple[BrowserDialogSnapshot, ...] = ()
+    issues: tuple[str, ...] = ()
+
+
 class BrowserEngineError(RuntimeError):
     """Controlled Browser Engine startup or lifecycle failure."""
 
