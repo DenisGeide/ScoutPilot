@@ -32,6 +32,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Показать готовность проекта и доступные команды.")
 
+    replay_summary_parser = subparsers.add_parser(
+        "replay-summary",
+        help="Показать безопасную русскую сводку JSON report/replay.",
+    )
+    replay_summary_parser.add_argument(
+        "path",
+        help="Путь к JSON report/replay, например reports/tmp/task-replay.json.",
+    )
+
     provider_smoke_parser = subparsers.add_parser(
         "provider-smoke",
         help="Вручную проверить live-интеграцию OpenAI или Anthropic без браузера.",
@@ -451,6 +460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_status(config)
         return 0
 
+    if args.command == "replay-summary":
+        return _run_replay_summary(args)
+
     if args.command == "run":
         try:
             return asyncio.run(_run_task(args))
@@ -511,6 +523,7 @@ def _print_status(config: AppConfig) -> None:
     print("Основное runtime demo доступно через scout-pilot live-local-demo.")
     print("Синтетическое почтовое demo доступно через scout-pilot mail-spam-demo.")
     print("Синтетическое demo заказа еды доступно через scout-pilot food-order-demo.")
+    print("Сводка report/replay доступна через scout-pilot replay-summary <path>.")
     print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
@@ -519,6 +532,20 @@ def _print_status(config: AppConfig) -> None:
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
     mode = "без видимого окна" if config.browser_headless else "с видимым окном"
     print(f"Режим браузера по умолчанию: {mode}.")
+
+
+def _run_replay_summary(args: argparse.Namespace) -> int:
+    from scout_pilot.reporting import ReplaySummaryError, summarize_replay_file
+
+    try:
+        summary = summarize_replay_file(Path(args.path))
+    except ReplaySummaryError as exc:
+        print(str(exc))
+        return 2
+
+    for line in summary.lines:
+        print(line)
+    return 0 if summary.safe_to_print else 2
 
 
 async def _run_task(args: argparse.Namespace) -> int:
