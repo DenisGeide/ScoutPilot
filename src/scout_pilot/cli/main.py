@@ -32,6 +32,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Показать готовность проекта и доступные команды.")
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Проверить локальную среду перед demo: Python, пакет, Playwright, Chromium, .env, Git ignore.",
+    )
+    doctor_parser.add_argument(
+        "--provider",
+        choices=("openai", "anthropic"),
+        help="Дополнительно проверить наличие локального API-ключа для выбранного live-провайдера.",
+    )
+
     replay_summary_parser = subparsers.add_parser(
         "replay-summary",
         help="Показать безопасную русскую сводку JSON report/replay.",
@@ -460,6 +470,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_status(config)
         return 0
 
+    if args.command == "doctor":
+        return asyncio.run(_run_doctor(args))
+
     if args.command == "replay-summary":
         return _run_replay_summary(args)
 
@@ -524,6 +537,7 @@ def _print_status(config: AppConfig) -> None:
     print("Синтетическое почтовое demo доступно через scout-pilot mail-spam-demo.")
     print("Синтетическое demo заказа еды доступно через scout-pilot food-order-demo.")
     print("Сводка report/replay доступна через scout-pilot replay-summary <path>.")
+    print("Проверка локальной среды доступна через scout-pilot doctor.")
     print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
@@ -532,6 +546,19 @@ def _print_status(config: AppConfig) -> None:
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
     mode = "без видимого окна" if config.browser_headless else "с видимым окном"
     print(f"Режим браузера по умолчанию: {mode}.")
+
+
+async def _run_doctor(args: argparse.Namespace) -> int:
+    from scout_pilot.cli.doctor import (
+        DoctorSettings,
+        format_doctor_report,
+        run_doctor,
+    )
+
+    report = await run_doctor(DoctorSettings(provider=args.provider))
+    for line in format_doctor_report(report):
+        print(line)
+    return report.exit_code
 
 
 def _run_replay_summary(args: argparse.Namespace) -> int:

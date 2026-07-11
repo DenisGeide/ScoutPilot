@@ -23,8 +23,11 @@ python -m playwright install chromium
 
 ```powershell
 scout-pilot status
+scout-pilot doctor
 python -m pytest
 ```
+
+`scout-pilot doctor` — это быстрая преддемо-проверка окружения. Команда проверяет Python, импорт пакета, Playwright, headless Chromium smoke через Browser Engine, `.env`, защиту browser profile и временных отчетов через `.gitignore`, а также состояние Git. Предупреждения вроде отсутствующего `.env` не считаются блокерами для mock/demo режима.
 
 ## Локальная конфигурация
 
@@ -88,6 +91,11 @@ scout-pilot provider-smoke --provider openai
 ```
 
 Для Anthropic команда такая же, но в `.env` нужен `ANTHROPIC_API_KEY` и модель, которую поддерживает Anthropic. Эта проверка опциональна и не входит в автоматические тесты.
+Если нужно только проверить, что локальный ключ указан, без live-запроса к модели:
+
+```powershell
+scout-pilot doctor --provider openai
+```
 
 Интерактивный режим:
 

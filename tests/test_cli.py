@@ -159,6 +159,15 @@ def test_provider_smoke_command_accepts_provider_choice():
     assert args.provider == "openai"
 
 
+def test_doctor_command_accepts_optional_provider_choice():
+    parser = build_parser()
+
+    args = parser.parse_args(["doctor", "--provider", "anthropic"])
+
+    assert args.command == "doctor"
+    assert args.provider == "anthropic"
+
+
 def test_profile_info_command_accepts_profile_name():
     parser = build_parser()
 
