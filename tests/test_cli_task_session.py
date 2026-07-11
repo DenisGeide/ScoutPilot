@@ -79,6 +79,16 @@ def test_live_cli_mode_reports_missing_provider_key(tmp_path, monkeypatch):
     assert "provider mock" in report["final"]["failure_ru"]
 
 
+def test_live_cli_provider_start_error_mentions_provider_extra():
+    message = task_session._provider_start_error_ru(
+        "openai",
+        RuntimeError("OpenAI SDK is not installed."),
+    )
+
+    assert "providers" in message
+    assert "--provider mock" in message
+
+
 def test_live_cli_mock_provider_runs_runtime_on_local_page(tmp_path):
     site = prepare_local_interview_site(tmp_path / "site")
     report_path = tmp_path / "live-report.json"

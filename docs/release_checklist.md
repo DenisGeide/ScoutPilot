@@ -7,11 +7,13 @@
 Перед публикацией нужно запускать:
 
 ```powershell
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 python -m pip check
 python -m compileall -q src tests
+python -m ruff check .
 python -m pytest -q
 scout-pilot status
+scout-pilot doctor
 scout-pilot run "Проверить страницу" --dry-run --dashboard off
 scout-pilot run "Проверить страницу" --live --provider mock --start-url https://example.com --headless --max-iterations 3 --dashboard off
 scout-pilot profile-info
@@ -24,6 +26,7 @@ scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 Опционально, только с локальным ключом в `.env`:
 
 ```powershell
+python -m pip install -e ".[providers]"
 scout-pilot provider-smoke --provider openai
 ```
 

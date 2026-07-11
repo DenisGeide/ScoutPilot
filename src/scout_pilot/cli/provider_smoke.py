@@ -82,7 +82,9 @@ async def run_provider_smoke(
         result = await provider.complete(_smoke_request(provider_config))
     except TimeoutError:
         return _failure(provider_name, LlmErrorCode.TIMEOUT)
-    except Exception:
+    except Exception as exc:
+        if _is_missing_provider_sdk(exc):
+            return _failure(provider_name, LlmErrorCode.CONFIGURATION_ERROR)
         return _failure(provider_name, LlmErrorCode.UNKNOWN)
 
     if not result.success:
@@ -177,7 +179,7 @@ def _failure(provider: LlmProviderName, code: LlmErrorCode) -> ProviderSmokeResu
         ),
         LlmErrorCode.CONFIGURATION_ERROR: (
             f"Конфигурация провайдера {provider.value} некорректна. Проверьте .env, "
-            "модель и выбранный provider."
+            "модель и установку optional dependencies: `python -m pip install -e \".[providers]\"`."
         ),
         LlmErrorCode.UNKNOWN: (
             f"Проверка провайдера {provider.value} остановилась из-за неизвестной ошибки. "
@@ -195,3 +197,12 @@ def _failure(provider: LlmProviderName, code: LlmErrorCode) -> ProviderSmokeResu
 def _safe_snippet(value: str) -> str:
     normalized = " ".join(value.split())
     return normalized[:180] if normalized else "ответ без текста"
+
+
+def _is_missing_provider_sdk(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return (
+        "sdk is not installed" in message
+        or "no module named 'openai'" in message
+        or "no module named 'anthropic'" in message
+    )

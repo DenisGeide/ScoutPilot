@@ -119,6 +119,26 @@ def test_provider_smoke_treats_empty_success_as_malformed(tmp_path, monkeypatch)
     assert "неожиданном формате" in result.message_ru
 
 
+def test_provider_smoke_reports_missing_optional_provider_sdk(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=unit-test-key\n", encoding="utf-8")
+
+    def missing_sdk_factory(_config):
+        raise RuntimeError("OpenAI SDK is not installed.")
+
+    result = asyncio.run(
+        run_provider_smoke(
+            ProviderSmokeSettings(provider="openai", env_file=env_file),
+            provider_factory=missing_sdk_factory,
+        )
+    )
+
+    assert result.success is False
+    assert result.failure_code is LlmErrorCode.CONFIGURATION_ERROR
+    assert "providers" in result.message_ru
+
+
 class FakeProvider:
     def __init__(self, result: LlmProviderResult) -> None:
         self.result = result

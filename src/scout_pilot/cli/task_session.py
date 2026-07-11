@@ -842,6 +842,11 @@ def _provider_start_error_ru(provider_name: str, exc: Exception) -> str:
             f"Не настроен API-ключ для провайдера {provider_name}. Добавьте ключ в локальный "
             ".env или запустите проверку с --provider mock."
         )
+    if "sdk is not installed" in str(exc).casefold():
+        return (
+            f"Не установлен SDK для провайдера {provider_name}. Установите optional dependencies "
+            '`python -m pip install -e ".[providers]"` или запустите проверку с --provider mock.'
+        )
     return (
         f"Не удалось подготовить LLM-провайдера {provider_name}: {type(exc).__name__}. "
         "Проверьте зависимости, настройки .env и выбранную модель."

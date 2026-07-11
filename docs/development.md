@@ -49,8 +49,11 @@
 python -m pip install -e ".[dev]"
 python -m playwright install chromium
 python -m pytest
+python -m ruff check .
 scout-pilot status
 ```
+
+Для ручных live-проверок OpenAI/Anthropic установите `python -m pip install -e ".[dev,providers]"`. Для обычной разработки и mock demo provider SDKs не нужны.
 
 Локальная проверка Browser Engine:
 
