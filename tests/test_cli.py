@@ -106,6 +106,29 @@ def test_mail_spam_demo_command_parses_local_mode():
     assert args.profile_dir == "profile"
 
 
+def test_food_order_demo_command_parses_local_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "food-order-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--site-dir",
+            "site",
+            "--profile-dir",
+            "profile",
+        ]
+    )
+
+    assert args.command == "food-order-demo"
+    assert args.headless is True
+    assert args.slow_mo_ms == 0
+    assert args.site_dir == "site"
+    assert args.profile_dir == "profile"
+
+
 def test_run_command_accepts_natural_language_task():
     parser = build_parser()
 
@@ -410,6 +433,45 @@ def test_mail_spam_demo_runs_local_synthetic_site(tmp_path, capsys):
     assert report["summary"]["pages_read_count"] == 10
     assert report["summary"]["security_pause_count"] >= 1
     assert replay_path.exists()
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+    assert "cookie" not in serialized
+
+
+def test_food_order_demo_runs_local_synthetic_site(tmp_path, capsys):
+    report_path = tmp_path / "food-report.json"
+    replay_path = tmp_path / "food-replay.json"
+
+    exit_code = main(
+        [
+            "food-order-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--site-dir",
+            str(tmp_path / "site"),
+            "--profile-dir",
+            str(tmp_path / "profile"),
+            "--report-path",
+            str(report_path),
+            "--replay-path",
+            str(replay_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+
+    assert exit_code == 0
+    assert "Food-order demo завершено безопасно" in captured.out
+    assert report["success"] is True
+    assert report["demo_name"] == "synthetic_food_order"
+    assert report["summary"]["pages_read_count"] >= 3
+    assert report["summary"]["security_pause_count"] >= 1
+    assert replay_path.exists()
+    assert "bbq burger" in serialized
+    assert "french fries" in serialized
     assert "<html" not in serialized
     assert "<button" not in serialized
     assert "cookie" not in serialized

@@ -401,6 +401,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=80,
         help="Небольшая задержка действий браузера для записи видео.",
     )
+
+    food_parser = subparsers.add_parser(
+        "food-order-demo",
+        help="Запустить локальное синтетическое демо заказа еды и остановиться перед оплатой.",
+    )
+    food_parser.add_argument(
+        "--site-dir",
+        help="Куда сгенерировать локальный сайт заказа еды. По умолчанию reports/tmp/food-order-demo-site.",
+    )
+    food_parser.add_argument(
+        "--profile-dir",
+        help="Постоянный профиль браузера для демо. По умолчанию .browser-profiles/food-order-demo.",
+    )
+    food_parser.add_argument(
+        "--report-path",
+        help="Куда сохранить JSON-отчет. По умолчанию reports/tmp/food-order-demo-report.json.",
+    )
+    food_parser.add_argument(
+        "--replay-path",
+        help="Куда сохранить JSON replay. По умолчанию reports/tmp/food-order-demo-replay.json.",
+    )
+    food_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить демо без видимого окна браузера.",
+    )
+    food_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно запустить видимое окно браузера. Это режим по умолчанию.",
+    )
+    food_parser.add_argument(
+        "--slow-mo-ms",
+        type=int,
+        default=80,
+        help="Небольшая задержка действий браузера для записи видео.",
+    )
     return parser
 
 
@@ -452,6 +489,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "mail-spam-demo":
         return asyncio.run(_run_mail_spam_demo(args))
 
+    if args.command == "food-order-demo":
+        return asyncio.run(_run_food_order_demo(args))
+
     parser.print_help()
     return 0
 
@@ -470,6 +510,7 @@ def _print_status(config: AppConfig) -> None:
     print("Локальное scripted demo доступно через scout-pilot interview-demo.")
     print("Основное runtime demo доступно через scout-pilot live-local-demo.")
     print("Синтетическое почтовое demo доступно через scout-pilot mail-spam-demo.")
+    print("Синтетическое demo заказа еды доступно через scout-pilot food-order-demo.")
     print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
@@ -879,6 +920,54 @@ async def _run_mail_spam_demo(args: argparse.Namespace) -> int:
         print("Почтовое demo завершено безопасно: реальные аккаунты не использовались, письма не удалялись.")
         return 0
     print("Почтовое demo остановилось раньше ожидаемого. Проверьте report/replay.")
+    return 1
+
+
+async def _run_food_order_demo(args: argparse.Namespace) -> int:
+    from scout_pilot.demo import FoodOrderDemoSettings, run_local_food_order_demo
+
+    config = AppConfig.load()
+    settings = FoodOrderDemoSettings(
+        site_dir=(
+            Path(args.site_dir)
+            if args.site_dir
+            else Path("reports/tmp/food-order-demo-site")
+        ),
+        profile_dir=(
+            Path(args.profile_dir)
+            if args.profile_dir
+            else Path(".browser-profiles/food-order-demo")
+        ),
+        report_path=(
+            Path(args.report_path)
+            if args.report_path
+            else Path("reports/tmp/food-order-demo-report.json")
+        ),
+        replay_path=(
+            Path(args.replay_path)
+            if args.replay_path
+            else Path("reports/tmp/food-order-demo-replay.json")
+        ),
+        headless=True if args.headless else False,
+        slow_mo_ms=args.slow_mo_ms,
+    )
+    if args.headed:
+        settings = replace(settings, headless=False)
+
+    result = await run_local_food_order_demo(config, settings, progress=print)
+    print(result.message_ru)
+    print(f"Локальный сайт заказа еды: {result.local_site_url}")
+    print(f"Отчет сохранен: {result.report_path}")
+    print(f"Replay-файл сохранен: {result.replay_path}")
+    print(
+        f"Позиции в корзине: {', '.join(result.selected_items) or 'нет'}. "
+        f"Checkout открыт: {_yes_no_ru(result.checkout_reached)}. "
+        f"Пауз безопасности: {result.security_pause_count}."
+    )
+    if result.success:
+        print("Food-order demo завершено безопасно: реальные сервисы и платежи не использовались.")
+        return 0
+    print("Food-order demo остановилось раньше ожидаемого. Проверьте report/replay.")
     return 1
 
 
