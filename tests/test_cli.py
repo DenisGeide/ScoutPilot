@@ -83,6 +83,29 @@ def test_live_local_demo_command_parses_runtime_mode():
     assert args.dashboard == "verbose"
 
 
+def test_mail_spam_demo_command_parses_local_mode():
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "mail-spam-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--site-dir",
+            "site",
+            "--profile-dir",
+            "profile",
+        ]
+    )
+
+    assert args.command == "mail-spam-demo"
+    assert args.headless is True
+    assert args.slow_mo_ms == 0
+    assert args.site_dir == "site"
+    assert args.profile_dir == "profile"
+
+
 def test_run_command_accepts_natural_language_task():
     parser = build_parser()
 
@@ -353,6 +376,43 @@ def test_live_local_demo_runs_through_autonomous_runtime(tmp_path, capsys):
     assert "<button" not in serialized
     assert "cookie" not in serialized
     assert "token=" not in serialized
+
+
+def test_mail_spam_demo_runs_local_synthetic_site(tmp_path, capsys):
+    report_path = tmp_path / "mail-report.json"
+    replay_path = tmp_path / "mail-replay.json"
+
+    exit_code = main(
+        [
+            "mail-spam-demo",
+            "--headless",
+            "--slow-mo-ms",
+            "0",
+            "--site-dir",
+            str(tmp_path / "site"),
+            "--profile-dir",
+            str(tmp_path / "profile"),
+            "--report-path",
+            str(report_path),
+            "--replay-path",
+            str(replay_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(report, ensure_ascii=False).casefold()
+
+    assert exit_code == 0
+    assert "Почтовое demo завершено безопасно" in captured.out
+    assert report["success"] is True
+    assert report["demo_name"] == "synthetic_mail_spam"
+    assert report["summary"]["pages_read_count"] == 10
+    assert report["summary"]["security_pause_count"] >= 1
+    assert replay_path.exists()
+    assert "<html" not in serialized
+    assert "<button" not in serialized
+    assert "cookie" not in serialized
 
 
 def test_live_local_demo_provider_uses_no_site_routes_or_selectors():

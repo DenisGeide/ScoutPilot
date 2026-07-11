@@ -364,6 +364,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=80,
         help="Небольшая задержка действий браузера для записи видео.",
     )
+
+    mail_parser = subparsers.add_parser(
+        "mail-spam-demo",
+        help="Запустить локальное синтетическое демо: прочитать 10 писем, найти спам и остановиться перед удалением.",
+    )
+    mail_parser.add_argument(
+        "--site-dir",
+        help="Куда сгенерировать локальный почтовый сайт. По умолчанию reports/tmp/mail-spam-demo-site.",
+    )
+    mail_parser.add_argument(
+        "--profile-dir",
+        help="Постоянный профиль браузера для демо. По умолчанию .browser-profiles/mail-spam-demo.",
+    )
+    mail_parser.add_argument(
+        "--report-path",
+        help="Куда сохранить JSON-отчет. По умолчанию reports/tmp/mail-spam-demo-report.json.",
+    )
+    mail_parser.add_argument(
+        "--replay-path",
+        help="Куда сохранить JSON replay. По умолчанию reports/tmp/mail-spam-demo-replay.json.",
+    )
+    mail_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запустить демо без видимого окна браузера.",
+    )
+    mail_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Принудительно запустить видимое окно браузера. Это режим по умолчанию.",
+    )
+    mail_parser.add_argument(
+        "--slow-mo-ms",
+        type=int,
+        default=80,
+        help="Небольшая задержка действий браузера для записи видео.",
+    )
     return parser
 
 
@@ -412,6 +449,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "live-local-demo":
         return asyncio.run(_run_live_local_demo(args))
 
+    if args.command == "mail-spam-demo":
+        return asyncio.run(_run_mail_spam_demo(args))
+
     parser.print_help()
     return 0
 
@@ -429,6 +469,7 @@ def _print_status(config: AppConfig) -> None:
     )
     print("Локальное scripted demo доступно через scout-pilot interview-demo.")
     print("Основное runtime demo доступно через scout-pilot live-local-demo.")
+    print("Синтетическое почтовое demo доступно через scout-pilot mail-spam-demo.")
     print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
     print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
@@ -790,6 +831,54 @@ async def _run_live_local_demo(args: argparse.Namespace) -> int:
         print("Live local demo завершено как ожидаемая безопасная остановка перед внешним действием.")
         return 0
     print("Live local demo не дошло до ожидаемой остановки. Проверьте report/replay.")
+    return 1
+
+
+async def _run_mail_spam_demo(args: argparse.Namespace) -> int:
+    from scout_pilot.demo import MailSpamDemoSettings, run_local_mail_spam_demo
+
+    config = AppConfig.load()
+    settings = MailSpamDemoSettings(
+        site_dir=(
+            Path(args.site_dir)
+            if args.site_dir
+            else Path("reports/tmp/mail-spam-demo-site")
+        ),
+        profile_dir=(
+            Path(args.profile_dir)
+            if args.profile_dir
+            else Path(".browser-profiles/mail-spam-demo")
+        ),
+        report_path=(
+            Path(args.report_path)
+            if args.report_path
+            else Path("reports/tmp/mail-spam-demo-report.json")
+        ),
+        replay_path=(
+            Path(args.replay_path)
+            if args.replay_path
+            else Path("reports/tmp/mail-spam-demo-replay.json")
+        ),
+        headless=True if args.headless else False,
+        slow_mo_ms=args.slow_mo_ms,
+    )
+    if args.headed:
+        settings = replace(settings, headless=False)
+
+    result = await run_local_mail_spam_demo(config, settings, progress=print)
+    print(result.message_ru)
+    print(f"Локальный почтовый сайт: {result.local_site_url}")
+    print(f"Отчет сохранен: {result.report_path}")
+    print(f"Replay-файл сохранен: {result.replay_path}")
+    print(
+        f"Прочитано писем: {result.messages_read}. "
+        f"Вероятный спам: {result.spam_candidates}. "
+        f"Пауз безопасности: {result.security_pause_count}."
+    )
+    if result.success:
+        print("Почтовое demo завершено безопасно: реальные аккаунты не использовались, письма не удалялись.")
+        return 0
+    print("Почтовое demo остановилось раньше ожидаемого. Проверьте report/replay.")
     return 1
 
 
