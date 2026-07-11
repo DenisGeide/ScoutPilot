@@ -42,7 +42,7 @@ screenshots/private/
 *.private.webp
 *.har
 
-# Local prompt pack used to drive staged development
+# Local private notes and scratch files
 promts/
 prompts/
 

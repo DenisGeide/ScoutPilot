@@ -53,7 +53,7 @@ Scout Pilot устроен как набор независимых слоев. 
 - Демонстрационные сценарии используют только URL, переданный пользователем, и URL, обнаруженные из текущего semantic observation.
 - HH.ru допускается как live smoke target в документации, но не как source-code workflow: в `scout_pilot.demo` не должно быть HH.ru routes, CSS selectors, XPath или assumptions о внутренних путях сайта.
 - Demo reports включают компактные observations, tool decisions, security pauses и short notes; полный HTML, DOM dumps, cookies, tokens, profile data и значения чувствительных полей туда не попадают.
-- `live-local-demo` дополнительно пишет replay и context budget metrics, чтобы reviewer видел runtime observations, reasoning/tool decisions и security boundary без live credentials.
+- `live-local-demo` дополнительно пишет replay и context budget metrics, чтобы читатель видел runtime observations, reasoning/tool decisions и security boundary без live credentials.
 - CLI dry-run и live sessions пишут runtime report и replay через `RuntimeReportRecorder`; sanitizer редактирует raw HTML, DOM-like поля, cookies, tokens, API keys, passwords, browser profile paths, absolute private paths, session state и private screenshots.
 - CLI dashboard строится только из `RuntimeEvent.details`, не читает Playwright, provider SDKs, raw HTML или browser session data. Та же безопасная dashboard trace попадает в report/replay, чтобы видео и артефакты показывали одни и те же tool decisions.
 - Verbose/debug CLI logs являются внутренними JSON-lines на английском; пользовательский прогресс и ошибки остаются на русском.
