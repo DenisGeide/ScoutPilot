@@ -125,7 +125,7 @@ class BrowserElementState:
 
 @dataclass(frozen=True)
 class BrowserSectionSnapshot:
-    """Sanitized visible section captured from the current page."""
+    """Sanitized rendered section captured from the current page."""
 
     role: str
     heading: str | None

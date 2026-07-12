@@ -144,6 +144,7 @@ class AutonomousAgentRuntime:
         observation: PageObservation | None = None
         previous_observation_signature: tuple[object, ...] | None = None
         visited_target_urls: set[str] = set()
+        observed_resource_urls: set[str] = set()
         repeated_target_count = 0
         requested_resource_count = _requested_distinct_resource_count(task.text)
         started_at = monotonic()
@@ -268,6 +269,8 @@ class AutonomousAgentRuntime:
                     observation,
                     phase="before_action",
                 )
+                if _resource_observation_has_evidence(observation):
+                    observed_resource_urls.add(str(observation.url))
                 yield self._event(
                     "observation_captured",
                     RuntimeStatus.RUNNING,
@@ -328,7 +331,7 @@ class AutonomousAgentRuntime:
                     return
 
                 completed_resource_count = _dominant_visited_resource_count(
-                    visited_target_urls
+                    observed_resource_urls
                 )
                 if (
                     requested_resource_count is not None
@@ -1442,22 +1445,23 @@ class AutonomousAgentRuntime:
                 source="runtime",
             )
         )
-        resource_summary = _resource_observation_summary(observation)
-        if resource_summary is not None and observation.url is not None:
+        resource_summaries = _resource_observation_summaries(observation)
+        if resource_summaries and observation.url is not None:
             resource_key = sha256(
                 repr(_target_identity(observation.url)).encode("utf-8")
             ).hexdigest()[:16]
-            await self._update_memory(
-                MemoryRecord(
-                    key=f"resource_evidence_{resource_key}",
-                    value={"summary": resource_summary},
-                    scope=task_id,
-                    layer=MemoryLayer.TASK,
-                    kind=MemoryRecordKind.SUMMARY,
-                    importance=70,
-                    source="runtime_semantic_observation",
+            for part_index, resource_summary in enumerate(resource_summaries, start=1):
+                await self._update_memory(
+                    MemoryRecord(
+                        key=f"resource_evidence_{resource_key}_{part_index}",
+                        value={"summary": resource_summary},
+                        scope=task_id,
+                        layer=MemoryLayer.TASK,
+                        kind=MemoryRecordKind.SUMMARY,
+                        importance=70,
+                        source="runtime_semantic_observation",
+                    )
                 )
-            )
 
     async def _remember_reflection(
         self,
@@ -2019,24 +2023,75 @@ def _dominant_visited_resource_count(visited_target_urls: set[str]) -> int:
     return max(Counter(shapes).values())
 
 
-def _resource_observation_summary(observation: PageObservation) -> str | None:
+_RESOURCE_EVIDENCE_TERMS = (
+    "requirements",
+    "qualifications",
+    "responsibilities",
+    "skills",
+    "experience",
+    "technology",
+    "stack",
+    "требован",
+    "квалификац",
+    "обязанност",
+    "задач",
+    "навык",
+    "опыт",
+    "технолог",
+    "стек",
+)
+
+
+def _resource_observation_summaries(observation: PageObservation) -> tuple[str, ...]:
     if observation.url is None or _url_resource_shape(observation.url) is None:
-        return None
-    parts = [
+        return ()
+    overview_parts = [
         part.strip()
         for part in (observation.title or "", observation.url, observation.summary)
         if part and part.strip()
     ]
-    seen = {part.casefold() for part in parts}
+    overview = " | ".join(dict.fromkeys(overview_parts))[:560]
+
+    sections: list[str] = []
+    seen: set[str] = set()
     for section in observation.sections:
         text = " ".join(section.text.split()).strip()
         if len(text) < 20 or text.casefold() in seen:
             continue
-        parts.append(text[:500])
+        sections.append(text)
         seen.add(text.casefold())
-        if len(" | ".join(parts)) >= 1800 or len(parts) >= 7:
+
+    ranked = sorted(
+        enumerate(sections),
+        key=lambda item: (-_resource_evidence_score(item[1]), item[0]),
+    )
+    selected_indexes = {0} if sections else set()
+    for index, _text in ranked:
+        selected_indexes.add(index)
+        if len(selected_indexes) >= 2:
             break
-    return " | ".join(parts)[:1900]
+
+    details = [
+        f"{(observation.title or 'Resource')[:120]} | Content: {sections[index][:420]}"
+        for index in sorted(selected_indexes)
+    ]
+    return tuple(part for part in (overview, *details) if part)
+
+
+def _resource_evidence_score(text: str) -> int:
+    normalized = text.casefold()
+    return sum(1 for term in _RESOURCE_EVIDENCE_TERMS if term in normalized)
+
+
+def _resource_observation_has_evidence(observation: PageObservation) -> bool:
+    if observation.url is None or _url_resource_shape(observation.url) is None:
+        return False
+    meaningful_text = " ".join(
+        " ".join(section.text.split())
+        for section in observation.sections
+        if len(" ".join(section.text.split())) >= 20
+    )
+    return len(meaningful_text) >= 20
 
 
 def _has_useful_page_content(observation: PageObservation) -> bool:

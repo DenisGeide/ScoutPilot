@@ -217,6 +217,52 @@ def test_browser_clicks_and_fills_by_semantic_ids(tmp_path):
     asyncio.run(scenario())
 
 
+def test_semantic_snapshot_includes_bounded_rendered_content_below_viewport(tmp_path):
+    page_path = tmp_path / "long-detail.html"
+    page_path.write_text(
+        """
+        <!doctype html>
+        <title>AI Engineer</title>
+        <main>
+          <h1>AI Engineer</h1>
+          <p>Salary from 300000 RUB. Experience 3-6 years.</p>
+          <div style="height: 1800px"></div>
+          <section>
+            <h2>Requirements</h2>
+            <p>Production Python, LLM integration, RAG pipelines and PostgreSQL.</p>
+            <input aria-label="Private note" value="must-not-leak">
+          </section>
+        </main>
+        """,
+        encoding="utf-8",
+    )
+    browser = PlaywrightBrowserEngine(
+        BrowserEngineConfig(
+            user_data_dir=tmp_path / "profile",
+            headless=True,
+            viewport_width=800,
+            viewport_height=600,
+        )
+    )
+    observer = SemanticObservationEngine(browser)
+
+    async def scenario():
+        await browser.start()
+        try:
+            await browser.navigate_to(page_path.resolve().as_uri())
+            return await observer.observe()
+        finally:
+            await browser.stop()
+
+    observation = asyncio.run(scenario())
+    section_text = " ".join(section.text for section in observation.sections)
+
+    assert "Production Python" in section_text
+    assert "RAG pipelines" in section_text
+    assert "must-not-leak" not in str(observation.to_llm_context())
+    assert len(str(observation.to_llm_context())) <= observation.limits["max_total_chars"]
+
+
 def test_browser_adopts_each_new_tab_opened_by_semantic_link(tmp_path):
     index_path = tmp_path / "index.html"
     first_path = tmp_path / "first.html"

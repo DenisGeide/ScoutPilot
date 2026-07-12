@@ -36,6 +36,8 @@ from scout_pilot.runtime import (
 from scout_pilot.runtime.agent import (
     _page_blocker_decision,
     _requested_distinct_resource_count,
+    _resource_observation_has_evidence,
+    _resource_observation_summaries,
 )
 from scout_pilot.observation import SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
@@ -389,6 +391,10 @@ def test_runtime_finalizes_immediately_after_requested_resource_count():
     assert provider.requests[-1].tools == ()
     assert final_payload["final_answer_only"] is True
     assert len(final_payload["visited_target_urls"]) == 3
+    memory_text = " ".join(final_payload["memory_summaries"])
+    assert "Verified requirements for resource 1" in memory_text
+    assert "Verified requirements for resource 2" in memory_text
+    assert "Verified requirements for resource 3" in memory_text
     completed = next(event for event in events if event.name == "task_completed")
     assert completed.details["completion_trigger"] == "requested_resource_count_reached"
     assert completed.details["completed_resource_count"] == 3
@@ -407,6 +413,70 @@ def test_requested_resource_count_ignores_salary_and_experience_numbers():
         )
         is None
     )
+
+
+def test_resource_completion_requires_semantic_page_evidence():
+    url = "https://example.test/items/1001"
+    metadata_only = PageObservation(
+        url=url,
+        title="Resource 1",
+        summary="Resource URL opened.",
+    )
+    with_details = PageObservation(
+        url=url,
+        title="Resource 1",
+        summary="Resource URL opened.",
+        sections=[
+            SemanticSection(
+                section_id="requirements",
+                role="main",
+                heading="Requirements",
+                text="Production Python and reliable LLM integrations are required.",
+            )
+        ],
+    )
+
+    assert _resource_observation_has_evidence(metadata_only) is False
+    assert _resource_observation_has_evidence(with_details) is True
+
+
+def test_resource_memory_preserves_overview_and_requirement_evidence():
+    observation = PageObservation(
+        url="https://example.test/items/1001?source=search",
+        title="Senior AI Engineer",
+        summary="Salary 300000 RUB. Experience 3-6 years.",
+        sections=[
+            SemanticSection(
+                section_id="overview",
+                role="main",
+                heading="Overview",
+                text="The product automates document processing for enterprise customers.",
+            ),
+            SemanticSection(
+                section_id="company",
+                role="main",
+                heading="Company",
+                text="The distributed team works across several product areas.",
+            ),
+            SemanticSection(
+                section_id="requirements",
+                role="main",
+                heading="Requirements",
+                text=(
+                    "Requirements include production Python, RAG pipelines, PostgreSQL, "
+                    "LLM evaluation and API integrations."
+                ),
+            ),
+        ],
+    )
+
+    summaries = _resource_observation_summaries(observation)
+
+    assert len(summaries) == 3
+    assert "https://example.test/items/1001" in summaries[0]
+    assert any("document processing" in summary for summary in summaries)
+    assert any("RAG pipelines" in summary for summary in summaries)
+    assert all(len(summary) <= 560 for summary in summaries)
 
 
 def test_runtime_replans_when_semantic_element_disappears():

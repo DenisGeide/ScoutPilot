@@ -473,7 +473,7 @@ class PlaywrightBrowserEngine:
                     "maxInteractive": 120,
                     "maxFields": 80,
                     "maxDialogs": 10,
-                    "maxSectionTextChars": 1400,
+                    "maxSectionTextChars": 480,
                     "maxElementTextChars": 240,
                 },
             )
@@ -1011,6 +1011,15 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
     if (rect.width <= 0 || rect.height <= 0) return false;
     return rect.bottom >= 0 && rect.right >= 0 && rect.top <= win.innerHeight && rect.left <= win.innerWidth;
   };
+  const isRendered = (element) => {
+    if (!element || !(element instanceof Element)) return false;
+    const style = win.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
   const visibleText = (element) => {
     if (!element) return "";
     const children = Array.from(element.children || []).filter(isVisible);
@@ -1028,9 +1037,45 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
     if (!element) return null;
     return truncate(visibleText(element), limit) || null;
   };
+  const renderedTextOf = (element) => {
+    if (!element || !isRendered(element)) return "";
+    const children = Array.from(element.children || []).filter(isRendered);
+    if (children.length === 0) {
+      return normalizeText(element.innerText || element.textContent || "");
+    }
+    const ownText = normalizeText(
+      Array.from(element.childNodes || [])
+        .filter((node) => node.nodeType === 3)
+        .map((node) => node.textContent || "")
+        .join(" ")
+    );
+    const childText = normalizeText(children.map((child) => renderedTextOf(child)).join(" "));
+    return normalizeText([ownText, childText].filter(Boolean).join(" "));
+  };
+  const chunkText = (value, limit) => {
+    const text = normalizeText(value);
+    if (!text) return [];
+    const chunks = [];
+    let offset = 0;
+    while (offset < text.length && chunks.length < maxSections) {
+      let end = Math.min(offset + limit, text.length);
+      if (end < text.length) {
+        const boundary = text.lastIndexOf(" ", end);
+        if (boundary > offset + Math.floor(limit * 0.6)) end = boundary;
+      }
+      chunks.push(text.slice(offset, end).trim());
+      offset = end;
+      while (text[offset] === " ") offset += 1;
+    }
+    return chunks.filter(Boolean);
+  };
   const headingOf = (element) => {
     const heading = Array.from(element.querySelectorAll("h1,h2,h3,h4,h5,h6")).find(isVisible);
     return heading ? textOf(heading, 160) : null;
+  };
+  const renderedHeadingOf = (element) => {
+    const heading = Array.from(element.querySelectorAll("h1,h2,h3,h4,h5,h6")).find(isRendered);
+    return heading ? truncate(renderedTextOf(heading), 160) || null : null;
   };
   const roleOf = (element) => {
     const explicit = normalizeText(element.getAttribute("role"));
@@ -1164,16 +1209,20 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
   const interactiveSelector = "a[href],button,input,textarea,select,summary,[role='button'],[role='link'],[role='checkbox'],[role='radio'],[role='textbox'],[role='searchbox'],[role='combobox'],[role='menuitem'],[role='tab'],[tabindex]:not([tabindex='-1']),[contenteditable='true']";
   const dialogSelector = "dialog[open],[role='dialog'],[role='alertdialog'],[aria-modal='true']";
 
-  const sections = Array.from(doc.querySelectorAll(sectionSelector))
-    .filter(isVisible)
-    .slice(0, maxSections)
-    .map((element) => ({
-      role: sectionRoleOf(element),
-      heading: headingOf(element),
-      text: textOf(element, maxSectionTextChars) || "",
-      location: locationOf(element),
-    }))
-    .filter((section) => section.text || section.heading);
+  const sections = [];
+  for (const element of Array.from(doc.querySelectorAll(sectionSelector)).filter(isRendered)) {
+    const heading = renderedHeadingOf(element);
+    for (const text of chunkText(renderedTextOf(element), maxSectionTextChars)) {
+      sections.push({
+        role: sectionRoleOf(element),
+        heading,
+        text,
+        location: locationOf(element),
+      });
+      if (sections.length >= maxSections) break;
+    }
+    if (sections.length >= maxSections) break;
+  }
 
   const interactiveElements = Array.from(doc.querySelectorAll(interactiveSelector))
     .filter(isVisible)

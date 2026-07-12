@@ -25,7 +25,9 @@ Scout Pilot устроен как набор независимых слоев. 
 
 - Реализация Playwright не должна выходить за пределы Browser Engine.
 - LLM не получает полный HTML, полный DOM или сырые Playwright-объекты.
-- Semantic Observation Engine работает только с sanitized Browser Engine snapshots.
+- Semantic Observation Engine работает только с sanitized Browser Engine snapshots. Browser Engine
+  разбивает отрисованный текст семантических `main`, `article` и `section` на ограниченные чанки,
+  включая содержимое ниже текущего viewport; HTML, DOM и значения полей при этом не передаются.
 - Observation Engine классифицирует типовые blocker-сигналы (`modal_dialog`, `cookie_banner`, `login_wall`, `captcha_blocking_page`, `region_prompt`, `empty_page`, `loading`) по безопасному visible text и Browser Engine issue codes; raw HTML в модель, report и replay не попадает.
 - Universal Semantic Navigation работает только с `PageObservation` и provider-neutral tool contracts: он не знает Playwright, CSS selectors, XPath, DOM handles, hardcoded URLs или website-specific workflows.
 - Generic semantic tools (`browser.resolve_target`, `browser.click_by_intent`, `browser.fill_by_label`, `browser.plan_form_fill`) сначала разрешают намерение через observation IDs; неоднозначные цели возвращают structured failure вместо опасного угадывания.

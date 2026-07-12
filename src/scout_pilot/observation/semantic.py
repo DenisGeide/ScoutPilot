@@ -355,16 +355,7 @@ class SemanticObservationEngine:
         if len(str(observation.to_llm_context())) <= self._settings.max_total_chars:
             return observation
 
-        sections = [
-            SemanticSection(
-                section_id=section.section_id,
-                role=section.role,
-                heading=section.heading,
-                text=_truncate(section.text, min(len(section.text), 160)),
-                location=section.location,
-            )
-            for section in observation.sections
-        ]
+        sections = list(observation.sections)
         elements = list(observation.interactive_elements)
         fields = list(observation.form_fields)
         dialogs = list(observation.dialogs)
@@ -392,12 +383,16 @@ class SemanticObservationEngine:
         while len(str(fitted.to_llm_context())) > self._settings.max_total_chars:
             if len(elements) > 12:
                 elements.pop()
-            elif len(sections) > 1:
-                sections.pop()
             elif len(fields) > 4:
                 fields.pop()
             elif len(dialogs) > 1:
                 dialogs.pop()
+            elif len(elements) > 8:
+                elements.pop()
+            elif len(fields) > 2:
+                fields.pop()
+            elif len(sections) > 8:
+                sections.pop()
             elif elements:
                 elements.pop()
             elif fields:
@@ -449,6 +444,22 @@ def _browser_section_priority(snapshot: BrowserSectionSnapshot) -> int:
     }.get(role, 40)
     if any(term in text for term in ("result", "search", "результат", "поиск")):
         score += 20
+    if any(
+        term in text
+        for term in (
+            "requirements",
+            "qualifications",
+            "responsibilities",
+            "skills",
+            "experience",
+            "требован",
+            "квалификац",
+            "обязанност",
+            "навык",
+            "опыт",
+        )
+    ):
+        score += 30
     return score
 
 
