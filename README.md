@@ -64,7 +64,7 @@ scout-pilot status
 scout-pilot menu
 ```
 
-В меню пункт `0` открывает быстрый режим: сначала вводится URL сайта, затем появляется строка `Задача >`. В нее можно писать обычные запросы подряд. Команды внутри режима: `/url` сменить сайт, `/report` показать последний replay/report, `/exit` выйти. Если URL оставить пустым, Scout Pilot поднимет локальный synthetic site и покажет работу через обычный runtime с видимым браузером. Пункты `1`-`8` открывают готовые проверки, report/replay, persistent profile и provider smoke.
+В меню пункт `0` открывает чат с агентом: сначала вводится URL сайта, затем браузер остается открытым, а в строку `Вы >` можно писать обычные задачи подряд. Enter на URL открывает `https://hh.ru`. Команды внутри режима: `/url` сменить сайт, `/report` показать последний replay/report, `/debug` включить подробный trace, `/exit` выйти и закрыть браузер. Пункты `1`-`8` открывают готовые проверки, report/replay, persistent profile и provider smoke.
 
 `doctor` проверяет версию Python, импорт пакета, наличие Playwright, headless-запуск Chromium через Browser Engine, `.env`, Git ignore для browser profile и `reports/tmp`, а также состояние working tree. Отсутствие `.env` или грязный Git показываются как предупреждения, не как падение команды.
 

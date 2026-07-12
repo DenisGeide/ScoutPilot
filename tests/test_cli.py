@@ -1,4 +1,5 @@
 import json
+import importlib
 from pathlib import Path
 
 from scout_pilot.cli.main import main
@@ -26,7 +27,7 @@ def test_menu_command_parses_launcher_defaults():
 
     assert args.command == "menu"
     assert args.provider == "mock"
-    assert args.dashboard == "verbose"
+    assert args.dashboard == "off"
     assert args.max_iterations == 8
     assert args.headless is False
 
@@ -40,22 +41,29 @@ def test_menu_opens_and_exits_without_starting_browser(monkeypatch, capsys):
 
     assert exit_code == 0
     assert "Scout Pilot - меню запуска" in captured.out
-    assert "0 - Быстрый режим" in captured.out
+    assert "0 - Чат с агентом" in captured.out
     assert "Меню закрыто" in captured.out
 
 
-def test_menu_fast_mode_can_exit_before_starting_browser(monkeypatch, capsys):
-    answers = iter(["0", "", "/exit", "9"])
+def test_menu_chat_mode_collects_url_without_starting_real_browser(monkeypatch, capsys):
+    cli_main = importlib.import_module("scout_pilot.cli.main")
+    answers = iter(["0", "hh.ru", "9"])
+    calls = []
+
+    async def fake_chat_session(args, *, start_url, provider):
+        calls.append((start_url, provider))
+        return 0
+
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(cli_main, "_menu_chat_session", fake_chat_session)
 
     exit_code = main(["menu"])
 
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Быстрый режим" in captured.out
-    assert "URL не указан" in captured.out
-    assert "Быстрый режим закрыт" in captured.out
+    assert "Чат с агентом" in captured.out
+    assert calls == [("https://hh.ru", "mock")]
 
 
 def test_menu_url_normalization_accepts_plain_domain():

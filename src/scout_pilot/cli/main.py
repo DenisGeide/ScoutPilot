@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     menu_parser.add_argument(
         "--dashboard",
         choices=("compact", "verbose", "off"),
-        default="verbose",
+        default="off",
         help="Насколько подробно показывать ход выполнения из меню.",
     )
     menu_parser.add_argument(
@@ -595,7 +595,7 @@ def _menu_lines() -> tuple[str, ...]:
     return (
         "",
         "Scout Pilot - меню запуска",
-        "0 - Быстрый режим: URL сайта -> задачи -> ответы агента",
+        "0 - Чат с агентом: сайт открыт, задачи пишутся обычным текстом",
         "1 - Локальное demo вакансий через реальный runtime",
         "2 - Открыть persistent profile для ручного входа",
         "3 - Проверить live-провайдера OpenAI/Anthropic",
@@ -656,55 +656,36 @@ async def _run_menu(args: argparse.Namespace) -> int:
 
 async def _menu_run_agent(args: argparse.Namespace) -> int:
     print("")
-    print("Быстрый режим: сначала укажите сайт, потом пишите задачи обычным текстом.")
-    print("Команды внутри режима: /url - сменить сайт, /report - последний отчет, /exit - выйти.")
+    print("Чат с агентом: браузер остается открытым, пока вы не выйдете из режима.")
+    print("Сначала откроем сайт. Потом пишите задачи обычным текстом.")
+    print("Команды: /url - сменить сайт, /report - последний отчет, /debug - подробный режим, /exit - выйти.")
     start_url = _menu_prompt_start_url()
     provider = _menu_fast_provider(args, start_url)
-    if start_url is None:
-        print("URL не указан: задачи будут запускаться на локальном безопасном demo-сайте.")
-    else:
-        print(f"Стартовый сайт: {start_url}")
-    print(f"Провайдер: {provider}. Вывод: {args.dashboard}. Итераций на задачу: {args.max_iterations}.")
-
-    while True:
-        task = _menu_read("Задача > ").strip()
-        normalized_task = task.casefold()
-        if normalized_task in {"", "help", "/help", "?"}:
-            print("Напишите задачу, например: найди три вакансии и сравни требования.")
-            print("Команды: /url, /report, /exit.")
-            continue
-        if normalized_task in {"9", "exit", "quit", "/exit", "выход"}:
-            print("Быстрый режим закрыт.")
-            return 0
-        if normalized_task == "/url":
-            start_url = _menu_prompt_start_url()
-            provider = _menu_fast_provider(args, start_url)
-            if start_url is None:
-                print("Теперь используется локальный demo-сайт.")
-            else:
-                print(f"Новый стартовый сайт: {start_url}")
-            continue
-        if normalized_task == "/report":
-            _menu_show_latest_replay()
-            continue
-
-        await _menu_run_one_agent_task(
-            args,
-            task=task,
-            start_url=start_url,
-            provider=provider,
-        )
-        print("Готово. Можно написать следующую задачу, сменить сайт через /url или выйти через /exit.")
+    print(f"Провайдер: {provider}. Итераций на задачу: {args.max_iterations}.")
+    return await _menu_chat_session(
+        args,
+        start_url=start_url,
+        provider=provider,
+    )
 
 
-def _menu_prompt_start_url() -> str | None:
+def _menu_task_help() -> None:
+    print("Пример: есть ли на странице поле поиска?")
+    print("Пример: найди AI Engineer вакансии с зарплатой выше 1500 долларов.")
+    print("Пример: открой отклики и приглашения и кратко скажи, что там есть.")
+    print("Команды: /url, /report, /debug, /exit.")
+
+
+def _menu_prompt_start_url() -> str:
     while True:
         raw_url = _menu_read(
-            "URL сайта (например https://hh.ru, Enter - локальный demo): "
+            "URL сайта (Enter - https://hh.ru): "
         ).strip()
+        if not raw_url:
+            raw_url = "https://hh.ru"
         start_url, error = _normalize_menu_start_url(raw_url)
         if error is None:
-            return start_url
+            return start_url or "https://hh.ru"
         print(error)
 
 
@@ -741,46 +722,369 @@ def _menu_fast_provider(args: argparse.Namespace, start_url: str | None) -> str:
     return "mock"
 
 
-async def _menu_run_one_agent_task(
+async def _menu_chat_session(
     args: argparse.Namespace,
     *,
-    task: str,
-    start_url: str | None,
+    start_url: str,
     provider: str,
 ) -> int:
-    if start_url is None:
-        print("Запускаю локальное demo через обычный автономный runtime.")
-        return await _run_live_local_demo(
-            argparse.Namespace(
-                task=[task],
-                provider=provider,
-                dashboard=args.dashboard,
-                max_iterations=args.max_iterations,
-                site_dir=None,
-                profile_dir=None,
-                report_path=None,
-                replay_path=None,
-                headless=bool(args.headless),
-                headed=not bool(args.headless),
-                slow_mo_ms=120,
-            )
-        )
-
-    print("Запускаю задачу через Browser Engine, Tool Runtime и Autonomous Runtime.")
-    return await _run_task(
-        argparse.Namespace(
-            task=[task],
-            live=True,
-            report_path=None,
-            replay_path=None,
-            dashboard=args.dashboard,
-            start_url=start_url,
-            provider=provider,
-            max_iterations=args.max_iterations,
-            headless=bool(args.headless),
-            headed=not bool(args.headless),
-        )
+    from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+    from scout_pilot.cli.task_session import (
+        _create_provider,
+        _provider_start_error_ru,
     )
+    from scout_pilot.memory import HierarchicalMemory
+    from scout_pilot.models import ToolRequest
+    from scout_pilot.observation import ObservationSettings, SemanticObservationEngine
+    from scout_pilot.tools import (
+        DefaultToolRuntime,
+        ToolContext,
+        create_browser_tool_registry,
+    )
+
+    config = AppConfig.load()
+    try:
+        llm_provider = _create_provider(provider, config)
+    except Exception as exc:
+        print(_provider_start_error_ru(provider, exc))
+        return 1
+
+    browser_settings = replace(
+        BrowserEngineConfig.from_app_config(config),
+        headless=bool(args.headless),
+        slow_mo_ms=120,
+    )
+    browser = PlaywrightBrowserEngine(browser_settings)
+    observation_engine = SemanticObservationEngine(
+        browser,
+        ObservationSettings.from_app_config(config),
+    )
+    registry = create_browser_tool_registry()
+    tool_runtime = DefaultToolRuntime(
+        registry,
+        ToolContext(browser=browser, observation_engine=observation_engine),
+    )
+    tool_schemas = registry.schemas()
+    memory = HierarchicalMemory()
+    debug_output = args.dashboard == "verbose"
+    last_report: Path | None = None
+    last_replay: Path | None = None
+
+    try:
+        print("Открываю браузер...")
+        await browser.start()
+        navigation = await tool_runtime.execute(ToolRequest("browser.navigate", {"url": start_url}))
+        if not navigation.success:
+            print(f"Не удалось открыть сайт: {navigation.message}")
+            return 1
+        state = await browser.current_state()
+        title = state.title or "страница открыта"
+        print(f"Открыл: {title}")
+        print(f"URL: {state.url or start_url}")
+        print("Пишите, что нужно сделать. Браузер останется открытым до выхода.")
+        _menu_task_help()
+
+        while True:
+            task_text = _menu_read("\nВы > ").strip()
+            normalized = task_text.casefold()
+            if normalized in {"", "help", "/help", "?"}:
+                _menu_task_help()
+                continue
+            if normalized in {"9", "exit", "quit", "/exit", "выход"}:
+                print("Останавливаю режим. Сейчас закрою браузер и сохраненные сессии останутся в profile.")
+                return 0
+            if normalized == "/debug":
+                debug_output = not debug_output
+                mode = "подробный" if debug_output else "краткий"
+                print(f"Режим вывода: {mode}.")
+                continue
+            if normalized == "/report":
+                if last_replay is None and last_report is None:
+                    print("Отчета пока нет: сначала выполните задачу.")
+                else:
+                    _run_replay_summary(
+                        argparse.Namespace(path=str(last_replay or last_report))
+                    )
+                continue
+            if normalized == "/url":
+                start_url = _menu_prompt_start_url()
+                navigation = await tool_runtime.execute(
+                    ToolRequest("browser.navigate", {"url": start_url})
+                )
+                if navigation.success:
+                    state = await browser.current_state()
+                    print(f"Открыл: {state.title or start_url}")
+                else:
+                    print(f"Не удалось открыть сайт: {navigation.message}")
+                continue
+
+            result = await _menu_chat_run_task(
+                task_text=task_text,
+                provider=llm_provider,
+                config=config,
+                observation_engine=observation_engine,
+                planning_provider=llm_provider,
+                tool_runtime=tool_runtime,
+                memory=memory,
+                tool_schemas=tool_schemas,
+                max_iterations=args.max_iterations,
+                debug_output=debug_output,
+            )
+            last_report = result["report_path"]
+            last_replay = result["replay_path"]
+            if result["success"]:
+                print("Можно написать следующую задачу.")
+            else:
+                print("Задача остановилась. Можно уточнить запрос и попробовать еще раз.")
+    finally:
+        await browser.stop()
+        print("Браузер закрыт.")
+
+
+async def _menu_chat_run_task(
+    *,
+    task_text: str,
+    provider: object,
+    planning_provider: object,
+    config: AppConfig,
+    observation_engine: object,
+    tool_runtime: object,
+    memory: object,
+    tool_schemas: tuple[object, ...],
+    max_iterations: int,
+    debug_output: bool,
+) -> dict[str, object]:
+    from scout_pilot.cli.dashboard import RuntimeDashboard
+    from scout_pilot.cli.task_session import (
+        CliTaskSettings,
+        _ask_user_confirmation,
+        _can_resume_after_confirmation,
+        _event_with_trace,
+        _result_message_ru,
+        default_artifact_paths,
+    )
+    from scout_pilot.llm import ReasoningEngine, ReasoningSettings
+    from scout_pilot.models import UserTask
+    from scout_pilot.planning import ProviderPlanningEngine
+    from scout_pilot.planning.types import PlanningSettings
+    from scout_pilot.reporting import RuntimeReportRecorder
+    from scout_pilot.runtime import AutonomousAgentRuntime, RuntimeSettings
+    from scout_pilot.runtime.types import TaskTerminationReason
+
+    paths = default_artifact_paths(config.reports_dir / "tmp", prefix="chat")
+    settings = CliTaskSettings(
+        task=task_text,
+        dry_run=False,
+        report_path=paths.report_path,
+        replay_path=paths.replay_path,
+        dashboard="off",
+        max_iterations=max_iterations,
+    )
+    recorder = RuntimeReportRecorder(
+        task=task_text,
+        mode="cli_chat",
+        dry_run=False,
+    )
+    dashboard = RuntimeDashboard(task=task_text)
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(
+            provider,
+            ReasoningSettings(
+                model=config.llm_model,
+                max_output_tokens=config.llm_max_output_tokens,
+                timeout_seconds=config.llm_timeout_seconds,
+                max_input_tokens=config.max_context_tokens,
+            ),
+        ),
+        planning_engine=ProviderPlanningEngine(
+            planning_provider,
+            PlanningSettings(
+                max_input_tokens=config.max_context_tokens,
+                max_output_tokens=config.llm_max_output_tokens,
+                timeout_seconds=config.llm_timeout_seconds,
+            ),
+        ),
+        tool_runtime=tool_runtime,
+        memory=memory,
+        tool_schemas=tool_schemas,
+        settings=RuntimeSettings(max_iterations=max_iterations),
+        security_constraints=(
+            "Перед отправкой форм, откликами, сообщениями, покупками, загрузкой файлов "
+            "или удалением данных нужно явное подтверждение пользователя."
+        ),
+        confirmation_constraints=(
+            "Никогда не продолжай автоматически после confirmation_required.",
+        ),
+        budget={"remaining_tokens": config.max_context_tokens},
+    )
+
+    print("Агент: понял задачу, смотрю текущую страницу.")
+    success = False
+    final_message = "Задача остановлена до результата."
+    try:
+        while True:
+            async for event in runtime.run(UserTask(task_text)):
+                _menu_record_chat_event(
+                    settings,
+                    dashboard,
+                    recorder,
+                    event,
+                    debug_output=debug_output,
+                )
+
+            if not _can_resume_after_confirmation(runtime):
+                break
+
+            confirmation = runtime.pending_confirmation
+            if confirmation is None:
+                break
+            if _ask_user_confirmation(confirmation, print):
+                confirmation_id = str(confirmation.get("confirmation_id") or "")
+                if runtime.confirm_pending_action(confirmation_id):
+                    print("Агент: подтверждение принято, выполняю только это действие.")
+                    continue
+            confirmation_id = str(confirmation.get("confirmation_id") or "")
+            if confirmation_id:
+                runtime.reject_pending_action(confirmation_id)
+            final_message = "Действие отменено. Я остановился без внешнего эффекта."
+            recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
+            artifacts = recorder.write(
+                report_path=paths.report_path,
+                replay_path=paths.replay_path,
+            )
+            print(f"Агент: {final_message}")
+            print(f"Отчет: {artifacts.report_path}")
+            return {
+                "success": False,
+                "report_path": artifacts.report_path,
+                "replay_path": artifacts.replay_path,
+            }
+
+        if runtime.last_result is None:
+            final_message = "Не удалось получить итоговый ответ."
+            success = False
+        else:
+            success = runtime.last_result.success
+            final_message = _result_message_ru(runtime.last_result)
+            if runtime.last_result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
+                success = False
+        recorder.finalize(
+            success=success,
+            summary_ru=final_message,
+            failure_ru=None if success else final_message,
+        )
+        artifacts = recorder.write(
+            report_path=paths.report_path,
+            replay_path=paths.replay_path,
+        )
+        print("")
+        print(f"Агент: {final_message}")
+        print(f"Отчет: {artifacts.report_path}")
+        return {
+            "success": success,
+            "report_path": artifacts.report_path,
+            "replay_path": artifacts.replay_path,
+        }
+    except Exception as exc:
+        final_message = (
+            f"Задача остановилась из-за ошибки {type(exc).__name__}. "
+            "Браузер остается в рамках текущей сессии, отчет сохранен."
+        )
+        recorder.finalize(success=False, summary_ru=final_message, failure_ru=final_message)
+        artifacts = recorder.write(
+            report_path=paths.report_path,
+            replay_path=paths.replay_path,
+        )
+        print(f"Агент: {final_message}")
+        print(f"Отчет: {artifacts.report_path}")
+        return {
+            "success": False,
+            "report_path": artifacts.report_path,
+            "replay_path": artifacts.replay_path,
+        }
+
+
+def _menu_record_chat_event(
+    settings: object,
+    dashboard: object,
+    recorder: object,
+    event: object,
+    *,
+    debug_output: bool,
+) -> None:
+    from scout_pilot.cli.task_session import _event_with_trace
+
+    dashboard.update(event)
+    recorder.record_event(_event_with_trace(event, dashboard.trace()))
+    message = _menu_chat_event_message(event, debug_output=debug_output)
+    if message:
+        print(f"Агент: {message}")
+
+
+def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
+    name = str(getattr(event, "name", ""))
+    details = dict(getattr(event, "details", {}))
+    if name == "observation_captured":
+        title = str(details.get("title") or "").strip()
+        return f"вижу страницу: {title}." if title else "смотрю страницу."
+    if name == "page_blocker_detected":
+        return str(details.get("message") or "на странице есть блокер, я не буду его обходить.")
+    if name == "tool_selected":
+        tool = str(details.get("selected_tool") or details.get("tool_name") or "")
+        action = _menu_tool_action_ru(tool)
+        if debug_output:
+            arguments = details.get("selected_tool_arguments") or {}
+            return f"{action} ({tool}, аргументы: {json.dumps(arguments, ensure_ascii=False)})"
+        return action
+    if name == "tool_execution_finished":
+        if debug_output:
+            status = details.get("tool_status")
+            message = details.get("message")
+            return f"результат инструмента: {status}; {message}"
+        if details.get("success") is True:
+            tool = str(details.get("tool_name") or "")
+            return _menu_tool_done_ru(tool)
+        if details.get("tool_status") == "paused":
+            return "нужно подтверждение перед внешним действием."
+        message = str(details.get("message") or "").strip()
+        return f"действие не удалось: {message}" if message else "действие не удалось."
+    if name == "confirmation_required":
+        return "останавливаюсь перед действием, которое требует подтверждения."
+    return ""
+
+
+def _menu_tool_action_ru(tool_name: str) -> str:
+    return {
+        "browser.navigate": "открываю страницу...",
+        "browser.observe": "проверяю, что видно на странице...",
+        "browser.resolve_target": "ищу подходящий элемент на странице...",
+        "browser.click": "нажимаю нужный элемент...",
+        "browser.click_by_intent": "нажимаю подходящую кнопку или ссылку...",
+        "browser.fill": "ввожу текст в поле...",
+        "browser.fill_by_label": "заполняю поле по смысловой подписи...",
+        "browser.plan_form_fill": "сопоставляю поля формы с задачей...",
+        "browser.press_key": "нажимаю клавишу...",
+        "browser.wait": "жду, пока страница обновится...",
+        "browser.screenshot": "делаю диагностический снимок...",
+    }.get(tool_name, "выполняю действие...")
+
+
+def _menu_tool_done_ru(tool_name: str) -> str:
+    if tool_name == "browser.observe":
+        return ""
+    return {
+        "browser.navigate": "страница открыта.",
+        "browser.resolve_target": "нашел подходящий элемент.",
+        "browser.click": "клик выполнен.",
+        "browser.click_by_intent": "клик выполнен.",
+        "browser.fill": "текст введен.",
+        "browser.fill_by_label": "текст введен.",
+        "browser.plan_form_fill": "поля формы сопоставлены.",
+        "browser.press_key": "клавиша нажата.",
+        "browser.wait": "страница обновилась.",
+        "browser.screenshot": "снимок сохранен.",
+    }.get(tool_name, "готово.")
 
 
 async def _menu_run_live_local_demo(args: argparse.Namespace) -> int:
