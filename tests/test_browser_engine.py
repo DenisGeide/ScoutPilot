@@ -287,6 +287,55 @@ def test_browser_adopts_each_new_tab_opened_by_semantic_link(tmp_path):
     assert second_state.title == "Second vacancy"
 
 
+def test_browser_escape_dismisses_low_risk_dom_modal(tmp_path):
+    page_path = tmp_path / "modal.html"
+    page_path.write_text(
+        """
+        <!doctype html>
+        <title>Vacancies</title>
+        <main><h1>Vacancy results</h1></main>
+        <div role="dialog" aria-modal="true" aria-label="Feedback survey">
+          <p>Why did you not respond?</p>
+        </div>
+        <script>
+          document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+              document.querySelector('[role="dialog"]').remove();
+            }
+          });
+        </script>
+        """,
+        encoding="utf-8",
+    )
+    browser = PlaywrightBrowserEngine(
+        BrowserEngineConfig(
+            user_data_dir=tmp_path / "profile",
+            headless=True,
+            default_timeout_ms=10000,
+            navigation_timeout_ms=10000,
+            screenshots_dir=tmp_path / "screenshots",
+        )
+    )
+    observer = SemanticObservationEngine(browser)
+
+    async def scenario():
+        await browser.start()
+        try:
+            await browser.navigate_to(page_path.resolve().as_uri())
+            before = await observer.observe()
+            result = await browser.press_key("Escape")
+            after = await observer.observe()
+            return before, result, after
+        finally:
+            await browser.stop()
+
+    before, result, after = asyncio.run(scenario())
+
+    assert result.success is True
+    assert before.dialogs
+    assert not after.dialogs
+
+
 class BrokenContext:
     async def close(self):
         raise RuntimeError("context close failed")

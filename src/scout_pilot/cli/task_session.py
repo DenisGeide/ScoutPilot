@@ -584,6 +584,12 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
         return "Повторное открытие той же страницы пропущено. Агент выберет другой результат."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
+    if event.name == "modal_dismiss_started":
+        return "Закрываю низкорисковое всплывающее окно."
+    if event.name == "modal_dismiss_finished":
+        if event.details.get("dismissed") is True:
+            return "Всплывающее окно закрыто. Выполнение основной задачи продолжается."
+        return "Не удалось безопасно закрыть всплывающее окно. Оно будет учтено как блокер."
     if event.name == "confirmation_required":
         return _confirmation_message(event)
     if event.name == "confirmation_approved":
@@ -607,6 +613,10 @@ def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
         return f"Повторный переход пропущен: {target}. Следующее действие: выбрать другую ссылку."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
+    if event.name == "modal_dismiss_finished":
+        if event.details.get("dismissed") is True:
+            return "Низкорисковое модальное окно закрыто клавишей Escape."
+        return "Модальное окно осталось открытым после безопасной попытки закрытия."
     if event.name == "confirmation_required":
         return _confirmation_message(event)
     if verbose and event.name == "reasoning_completed":

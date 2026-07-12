@@ -16,6 +16,7 @@ from scout_pilot.llm import (
 from scout_pilot.memory import HierarchicalMemory
 from scout_pilot.models import (
     ExecutionPlan,
+    DialogSummary,
     InteractiveElement,
     PageIssue,
     PageIssueCode,
@@ -188,6 +189,34 @@ def test_runtime_marks_unchanged_observation_before_second_reasoning_request():
         for summary in second_payload["memory_summaries"]
     )
     assert sum(event.name == "observation_captured" for event in events) == 2
+
+
+def test_runtime_safely_dismisses_unrelated_modal_before_reasoning():
+    provider = MockLlmProvider([_text_result("The useful page is visible.")])
+    observation_engine = DismissibleModalObservationEngine()
+    tool_runtime = ModalDismissToolRuntime(observation_engine)
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        tool_runtime,
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=2, max_failures=1),
+        observation_engine=observation_engine,
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Read the vacancy list"))))
+    provider_payload = json.loads(provider.requests[0].messages[1].content)
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        ToolRequest(name="browser.press_key", arguments={"key": "Escape"})
+    ]
+    assert any(event.name == "modal_dismiss_started" for event in events)
+    finished = next(event for event in events if event.name == "modal_dismiss_finished")
+    assert finished.details["dismissed"] is True
+    assert "dialogs" not in provider_payload["observation"]
+    assert provider_payload["observation"].get("issues", []) == []
 
 
 def test_runtime_blocks_reopening_the_same_observed_target_url():
@@ -732,6 +761,52 @@ class RepeatedLinkObservationEngine:
                 )
             ],
         )
+
+
+class DismissibleModalObservationEngine:
+    def __init__(self):
+        self.dismissed = False
+
+    async def observe(self):
+        if self.dismissed:
+            return PageObservation(
+                url="https://example.test/vacancies",
+                title="Vacancies",
+                summary="Vacancy list is visible.",
+            )
+        return PageObservation(
+            url="https://example.test/vacancies",
+            title="Vacancies",
+            summary="An unrelated feedback survey is visible.",
+            dialogs=[
+                DialogSummary(
+                    dialog_id="dialog_feedback",
+                    role="dialog",
+                    title="Why did you not respond?",
+                    text="Optional feedback survey.",
+                )
+            ],
+            issues=[
+                PageIssue(
+                    PageIssueCode.MODAL_DIALOG,
+                    "A visible modal or dialog is present.",
+                    severity="warning",
+                )
+            ],
+        )
+
+
+class ModalDismissToolRuntime:
+    def __init__(self, observation_engine: DismissibleModalObservationEngine):
+        self.observation_engine = observation_engine
+        self.requests = []
+
+    async def execute(self, request):
+        self.requests.append(request)
+        if request != ToolRequest(name="browser.press_key", arguments={"key": "Escape"}):
+            raise AssertionError(f"Unexpected modal dismiss request: {request}")
+        self.observation_engine.dismissed = True
+        return _tool_result("browser.press_key", success=True, message="Pressed Escape.")
 
 
 class BlockedObservationEngine:

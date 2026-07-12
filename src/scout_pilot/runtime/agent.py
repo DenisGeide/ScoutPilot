@@ -172,6 +172,50 @@ class AutonomousAgentRuntime:
                 )
                 yield transition
                 observation = await self._observation_engine.observe()
+                if _can_auto_dismiss_modal(observation):
+                    dismiss_request = ToolRequest(
+                        name="browser.press_key",
+                        arguments={"key": "Escape"},
+                    )
+                    yield self._event(
+                        "modal_dismiss_started",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.modal.dismiss_started",
+                        details={
+                            "tool_name": dismiss_request.name,
+                            "next_action": "dismiss_low_risk_modal",
+                        },
+                    )
+                    dismiss_result = await self._tool_runtime.execute(dismiss_request)
+                    await self._remember_tool_result(task_id, dismiss_result)
+                    refreshed_observation = await self._observation_engine.observe()
+                    dismissed = not _has_page_issue(
+                        refreshed_observation,
+                        PageIssueCode.MODAL_DIALOG,
+                    )
+                    yield self._event(
+                        "modal_dismiss_finished",
+                        RuntimeStatus.RUNNING
+                        if dismiss_result.success and dismissed
+                        else RuntimeStatus.FAILED,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.modal.dismiss_finished",
+                        details={
+                            "tool_name": dismiss_result.tool_name,
+                            "tool_status": dismiss_result.status.value,
+                            "success": dismiss_result.success,
+                            "dismissed": dismissed,
+                            "message": dismiss_result.message,
+                            "next_action": (
+                                "continue_task" if dismissed else "reason_about_modal"
+                            ),
+                        },
+                    )
+                    if dismiss_result.success and dismissed:
+                        observation = refreshed_observation
                 observation_signature = _observation_signature(observation)
                 if observation_signature == previous_observation_signature:
                     await self._remember_event(
@@ -1441,10 +1485,11 @@ def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object]
     if PageIssueCode.MODAL_DIALOG in issue_codes:
         return _blocker_decision(
             blocker_type="modal_dialog",
-            runtime_response="ask_user_when_unclear",
-            message="Visible modal dialog detected; runtime records it and proceeds only through normal safe tools.",
+            runtime_response="safe_dismiss_then_reason_if_still_visible",
+            message="Visible modal dialog remains after a safe dismiss attempt; runtime records it before reasoning.",
             message_ru=(
-                "На странице видно модальное окно. Агент учтет его как возможный блокер и не будет угадывать опасное действие."
+                "На странице осталось модальное окно. Агент уже попробовал безопасно закрыть его; "
+                "дальше он учтет окно как блокер и не будет угадывать опасное действие."
             ),
             issues=issue_details,
             stop=False,
@@ -1513,6 +1558,23 @@ def _has_useful_page_content(observation: PageObservation) -> bool:
         or observation.form_fields
         or observation.dialogs
     )
+
+
+def _has_page_issue(observation: PageObservation, code: PageIssueCode) -> bool:
+    return any(issue.code is code for issue in observation.issues)
+
+
+def _can_auto_dismiss_modal(observation: PageObservation) -> bool:
+    issue_codes = {issue.code for issue in observation.issues}
+    if PageIssueCode.MODAL_DIALOG not in issue_codes:
+        return False
+    requires_user_handling = {
+        PageIssueCode.BLOCKED_PAGE,
+        PageIssueCode.CAPTCHA_BLOCKING_PAGE,
+        PageIssueCode.LOGIN_WALL,
+        PageIssueCode.REGION_PROMPT,
+    }
+    return issue_codes.isdisjoint(requires_user_handling)
 
 
 def _blocker_decision(

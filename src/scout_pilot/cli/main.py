@@ -1044,6 +1044,12 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
         if details.get("stop") is True:
             return "на странице есть блокер; я не буду обходить CAPTCHA или автоматизировать вход."
         return "страница еще загружается или пока пуста; проверяю доступный контекст."
+    if name == "modal_dismiss_started":
+        return "закрываю всплывающее окно, не относящееся к задаче..."
+    if name == "modal_dismiss_finished":
+        if details.get("dismissed") is True:
+            return "всплывающее окно закрыто; продолжаю задачу."
+        return "не удалось безопасно закрыть окно; учитываю его как блокер."
     if name == "tool_selected":
         tool = str(details.get("selected_tool") or details.get("tool_name") or "")
         action = _menu_tool_action_ru(tool)
