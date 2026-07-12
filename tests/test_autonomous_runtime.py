@@ -33,7 +33,10 @@ from scout_pilot.runtime import (
     RuntimeSettings,
     TaskTerminationReason,
 )
-from scout_pilot.runtime.agent import _page_blocker_decision
+from scout_pilot.runtime.agent import (
+    _page_blocker_decision,
+    _requested_distinct_resource_count,
+)
 from scout_pilot.observation import SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
 from scout_pilot.tools.types import (
@@ -138,11 +141,12 @@ def test_runtime_retries_retryable_tool_failure_and_revises_plan():
     assert any(event.name == "plan_revised" for event in events)
 
 
-def test_runtime_stops_at_max_iterations():
+def test_runtime_returns_partial_result_at_max_iterations():
     provider = MockLlmProvider(
         [
             _text_result("NEED_OBSERVATION: first pass"),
             _text_result("NEED_OBSERVATION: second pass"),
+            _text_result("Partial answer from collected observations."),
         ]
     )
     runtime = _runtime(
@@ -157,10 +161,36 @@ def test_runtime_stops_at_max_iterations():
 
     assert runtime.last_result is not None
     assert runtime.last_result.success is False
-    assert runtime.last_result.final_state is AgentState.FAILED
-    assert runtime.last_result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED
-    assert events[-1].name == "task_failed"
-    assert events[-1].details["termination_reason"] == "max_iterations_exceeded"
+    assert runtime.last_result.final_state is AgentState.COMPLETED
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PARTIAL_RESULT
+    assert runtime.last_result.answer == "Partial answer from collected observations."
+    assert events[-1].name == "task_partial_result"
+    assert events[-1].details["termination_reason"] == "partial_result"
+
+
+def test_runtime_returns_partial_result_when_wall_clock_budget_is_exhausted():
+    provider = MockLlmProvider([_text_result("Partial answer within the video budget.")])
+    observation_engine = QueuedObservationEngine()
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([]),
+        HierarchicalMemory(),
+        settings=RuntimeSettings(
+            max_iterations=128,
+            max_failures=2,
+            max_elapsed_seconds=0,
+        ),
+        observation_engine=observation_engine,
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Return collected work on timeout"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PARTIAL_RESULT
+    assert runtime.last_result.answer == "Partial answer within the video budget."
+    assert observation_engine.count == 0
+    assert events[-1].details["completion_trigger"] == "max_elapsed_seconds"
 
 
 def test_runtime_marks_unchanged_observation_before_second_reasoning_request():
@@ -305,6 +335,80 @@ def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():
     )
 
 
+def test_runtime_finalizes_immediately_after_requested_resource_count():
+    resource_urls = [
+        "https://example.test/items/1001",
+        "https://example.test/items/1002",
+        "https://example.test/items/1003",
+    ]
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("browser.navigate", {"url": resource_urls[0]}),
+            _tool_call_result("browser.back", {}),
+            _tool_call_result("browser.navigate", {"url": resource_urls[1]}),
+            _tool_call_result("browser.back", {}),
+            _tool_call_result("browser.navigate", {"url": resource_urls[2]}),
+            _text_result("Three distinct resources compared with exact links."),
+        ]
+    )
+    tool_runtime = FakeToolRuntime(
+        [
+            _tool_result("browser.navigate", success=True),
+            _tool_result("browser.back", success=True),
+            _tool_result("browser.navigate", success=True),
+            _tool_result("browser.back", success=True),
+            _tool_result("browser.navigate", success=True),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=FastMultiResourceObservationEngine(resource_urls),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(
+            ToolRequest(name="browser.navigate", arguments={"url": resource_urls[0]})
+        ),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_navigate_schema(), _browser_back_schema()],
+        settings=RuntimeSettings(max_iterations=128, max_failures=5),
+    )
+
+    events = asyncio.run(
+        _collect(
+            runtime.run(
+                UserTask("Найди три разные страницы, прочитай каждую и сравни результаты")
+            )
+        )
+    )
+    final_payload = json.loads(provider.requests[-1].messages[1].content)
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Three distinct resources compared with exact links."
+    assert len(provider.requests) == 6
+    assert len(tool_runtime.requests) == 5
+    assert provider.requests[-1].tools == ()
+    assert final_payload["final_answer_only"] is True
+    assert len(final_payload["visited_target_urls"]) == 3
+    completed = next(event for event in events if event.name == "task_completed")
+    assert completed.details["completion_trigger"] == "requested_resource_count_reached"
+    assert completed.details["completed_resource_count"] == 3
+
+
+def test_requested_resource_count_ignores_salary_and_experience_numbers():
+    assert (
+        _requested_distinct_resource_count(
+            "Найди три разные вакансии с зарплатой 250000 и опытом 5 лет"
+        )
+        == 3
+    )
+    assert (
+        _requested_distinct_resource_count(
+            "Найди вакансии с зарплатой 10 долларов и опытом 5 лет"
+        )
+        is None
+    )
+
+
 def test_runtime_replans_when_semantic_element_disappears():
     provider = MockLlmProvider(
         [
@@ -347,8 +451,13 @@ def test_runtime_replans_when_semantic_element_disappears():
     assert reflection.details["recommended_action"] == "replan"
 
 
-def test_runtime_stops_when_retryable_failure_reaches_max_failures():
-    provider = MockLlmProvider([_tool_call_result("test.click", {"target": "primary"})])
+def test_runtime_returns_partial_result_when_retryable_failure_reaches_limit():
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("test.click", {"target": "primary"}),
+            _text_result("Partial result after tool failure."),
+        ]
+    )
     tool_runtime = FakeToolRuntime(
         [
             _tool_result(
@@ -374,8 +483,9 @@ def test_runtime_stops_when_retryable_failure_reaches_max_failures():
 
     assert runtime.last_result is not None
     assert runtime.last_result.success is False
-    assert runtime.last_result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED
-    assert events[-1].details["termination_reason"] == "max_failures_exceeded"
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PARTIAL_RESULT
+    assert runtime.last_result.answer == "Partial result after tool failure."
+    assert events[-1].details["termination_reason"] == "partial_result"
 
 
 def test_runtime_reports_provider_failure_with_russian_user_message():
@@ -403,10 +513,10 @@ def test_runtime_reports_provider_failure_with_russian_user_message():
     reasoning_event = next(event for event in events if event.name == "reasoning_completed")
 
     assert runtime.last_result is not None
-    assert runtime.last_result.termination_reason is TaskTerminationReason.REASONING_FAILURE
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PARTIAL_RESULT
     assert reasoning_event.details["provider_error"]["code"] == "timeout"
-    assert "LLM" in events[-1].details["message_ru"]
-    assert "Проверьте" in events[-1].details["message_ru"]
+    assert runtime.last_result.answer is not None
+    assert "защит" in events[-1].details["message_ru"].casefold()
 
 
 def test_runtime_observes_again_after_noop_without_consuming_failure_limit():
@@ -740,6 +850,15 @@ def _browser_navigate_schema() -> ToolSchema:
     )
 
 
+def _browser_back_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.back",
+        description="Return to the previous page.",
+        input_schema=ToolInputSchema(),
+        output_schema=ToolOutputSchema(),
+    )
+
+
 def _tool_call_result(name, arguments):
     return LlmProviderResult(
         success=True,
@@ -899,6 +1018,45 @@ class MultipleResourceObservationEngine:
             url=current_url,
             title="Item details",
             summary="Distinct item details are visible.",
+        )
+
+
+class FastMultiResourceObservationEngine:
+    def __init__(self, resource_urls):
+        self.resource_urls = list(resource_urls)
+        self.count = 0
+
+    async def observe(self):
+        self.count += 1
+        if self.count in {1, 4, 5, 8, 9}:
+            return PageObservation(
+                url="https://example.test/results",
+                title="Results",
+                summary="Distinct result links are visible.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id=f"el_{index}",
+                        role="link",
+                        accessible_name=f"Result {index}",
+                        visible_text=f"Result {index}",
+                        target_url=url,
+                    )
+                    for index, url in enumerate(self.resource_urls, start=1)
+                ],
+            )
+        resource_index = 0 if self.count < 4 else 1 if self.count < 8 else 2
+        return PageObservation(
+            url=self.resource_urls[resource_index],
+            title=f"Resource {resource_index + 1}",
+            summary=f"Resource {resource_index + 1} details.",
+            sections=[
+                SemanticSection(
+                    section_id=f"section_{resource_index + 1}",
+                    role="main",
+                    heading="Requirements",
+                    text=f"Verified requirements for resource {resource_index + 1}.",
+                )
+            ],
         )
 
 

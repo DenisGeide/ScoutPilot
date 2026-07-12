@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
+from hashlib import sha256
+from time import monotonic
 from typing import Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -142,6 +145,8 @@ class AutonomousAgentRuntime:
         previous_observation_signature: tuple[object, ...] | None = None
         visited_target_urls: set[str] = set()
         repeated_target_count = 0
+        requested_resource_count = _requested_distinct_resource_count(task.text)
+        started_at = monotonic()
         plan: ExecutionPlan | None = None
         failure_count = 0
         self._state = AgentState.IDLE
@@ -166,6 +171,32 @@ class AutonomousAgentRuntime:
         try:
             for iteration in range(1, self._settings.max_iterations + 1):
                 progress = _progress(iteration, self._settings, failure_count, plan)
+                if monotonic() - started_at >= self._settings.max_elapsed_seconds:
+                    result = await self._partial_result_after_limit(
+                        task=task,
+                        task_id=task_id,
+                        observation=observation,
+                        visited_target_urls=visited_target_urls,
+                        progress=progress,
+                        plan=plan,
+                        reason=(
+                            "Maximum live task duration reached before the full goal was completed."
+                        ),
+                    )
+                    self.last_result = result
+                    yield self._event(
+                        "task_partial_result",
+                        RuntimeStatus.COMPLETED,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.task.partial_result",
+                        details={
+                            **_result_details(result),
+                            "completion_trigger": "max_elapsed_seconds",
+                            "max_elapsed_seconds": self._settings.max_elapsed_seconds,
+                        },
+                    )
+                    return
 
                 transition = self._transition(
                     AgentState.OBSERVING,
@@ -294,6 +325,59 @@ class AutonomousAgentRuntime:
                     event, result = await self._cancel(task_id, task, progress, plan)
                     self.last_result = result
                     yield event
+                    return
+
+                completed_resource_count = _dominant_visited_resource_count(
+                    visited_target_urls
+                )
+                if (
+                    requested_resource_count is not None
+                    and completed_resource_count >= requested_resource_count
+                ):
+                    yield self._transition(
+                        AgentState.REASONING,
+                        "Requested distinct resource count reached; finalize without more tools.",
+                        task_id,
+                        progress,
+                    )
+                    answer = await self._finalize_answer(
+                        task=task,
+                        task_id=task_id,
+                        observation=observation,
+                        visited_target_urls=visited_target_urls,
+                        reason=(
+                            f"The requested {requested_resource_count} distinct resource pages "
+                            "have been read."
+                        ),
+                    )
+                    budget_event = self._context_budget_event(
+                        "finalization",
+                        self._reasoning_engine,
+                        task_id,
+                        progress,
+                    )
+                    if budget_event is not None:
+                        yield budget_event
+                    result = await self._complete(
+                        task_id,
+                        task,
+                        progress,
+                        plan,
+                        answer,
+                    )
+                    self.last_result = result
+                    yield self._event(
+                        "task_completed",
+                        RuntimeStatus.COMPLETED,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.task.completed",
+                        details={
+                            **_result_details(result),
+                            "completion_trigger": "requested_resource_count_reached",
+                            "completed_resource_count": completed_resource_count,
+                        },
+                    )
                     return
 
                 if plan is None:
@@ -434,22 +518,28 @@ class AutonomousAgentRuntime:
                     for event in events:
                         yield event
                     if failure_count >= self._settings.max_failures:
-                        result = await self._fail(
-                            task_id,
-                            task,
-                            _progress(iteration, self._settings, failure_count, plan),
-                            plan,
-                            TaskTerminationReason.REASONING_FAILURE,
-                            reasoning.message,
+                        partial_progress = _progress(
+                            iteration,
+                            self._settings,
                             failure_count,
+                            plan,
+                        )
+                        result = await self._partial_result_after_limit(
+                            task=task,
+                            task_id=task_id,
+                            observation=observation,
+                            visited_target_urls=visited_target_urls,
+                            progress=partial_progress,
+                            plan=plan,
+                            reason=f"Reasoning failure limit reached: {reasoning.message}",
                         )
                         self.last_result = result
                         yield self._event(
-                            "task_failed",
-                            RuntimeStatus.FAILED,
+                            "task_partial_result",
+                            RuntimeStatus.COMPLETED,
                             task_id=task_id,
-                            progress=_progress(iteration, self._settings, failure_count, plan),
-                            message_key="runtime.task.failed",
+                            progress=partial_progress,
+                            message_key="runtime.task.partial_result",
                             details=_result_details(result),
                         )
                         return
@@ -536,22 +626,22 @@ class AutonomousAgentRuntime:
                         },
                     )
                     if repeated_target_count >= self._settings.max_repeated_targets:
-                        result = await self._fail(
-                            task_id,
-                            task,
-                            progress,
-                            plan,
-                            TaskTerminationReason.MAX_FAILURES_EXCEEDED,
-                            message,
-                            failure_count,
+                        result = await self._partial_result_after_limit(
+                            task=task,
+                            task_id=task_id,
+                            observation=observation,
+                            visited_target_urls=visited_target_urls,
+                            progress=progress,
+                            plan=plan,
+                            reason=message,
                         )
                         self.last_result = result
                         yield self._event(
-                            "task_failed",
-                            RuntimeStatus.FAILED,
+                            "task_partial_result",
+                            RuntimeStatus.COMPLETED,
                             task_id=task_id,
                             progress=progress,
-                            message_key="runtime.task.failed",
+                            message_key="runtime.task.partial_result",
                             details=_result_details(result),
                         )
                         return
@@ -750,22 +840,31 @@ class AutonomousAgentRuntime:
 
                 if evaluation.outcome is not StepOutcome.SUCCESS:
                     if failure_count >= self._settings.max_failures:
-                        result = await self._fail(
-                            task_id,
-                            task,
-                            _progress(iteration, self._settings, failure_count, plan),
-                            plan,
-                            TaskTerminationReason.MAX_FAILURES_EXCEEDED,
-                            evaluation.reflection_summary,
+                        partial_progress = _progress(
+                            iteration,
+                            self._settings,
                             failure_count,
+                            plan,
+                        )
+                        result = await self._partial_result_after_limit(
+                            task=task,
+                            task_id=task_id,
+                            observation=post_action_observation,
+                            visited_target_urls=visited_target_urls,
+                            progress=partial_progress,
+                            plan=plan,
+                            reason=(
+                                "Repeated tool/recovery failure limit reached: "
+                                f"{evaluation.reflection_summary}"
+                            ),
                         )
                         self.last_result = result
                         yield self._event(
-                            "task_failed",
-                            RuntimeStatus.FAILED,
+                            "task_partial_result",
+                            RuntimeStatus.COMPLETED,
                             task_id=task_id,
-                            progress=_progress(iteration, self._settings, failure_count, plan),
-                            message_key="runtime.task.failed",
+                            progress=partial_progress,
+                            message_key="runtime.task.partial_result",
                             details=_result_details(result),
                         )
                         return
@@ -811,22 +910,22 @@ class AutonomousAgentRuntime:
                 failure_count,
                 plan,
             )
-            result = await self._fail(
-                task_id,
-                task,
-                progress,
-                plan,
-                TaskTerminationReason.MAX_ITERATIONS_EXCEEDED,
-                "Maximum iteration limit reached.",
-                failure_count,
+            result = await self._partial_result_after_limit(
+                task=task,
+                task_id=task_id,
+                observation=observation,
+                visited_target_urls=visited_target_urls,
+                progress=progress,
+                plan=plan,
+                reason="Maximum autonomous step limit reached.",
             )
             self.last_result = result
             yield self._event(
-                "task_failed",
-                RuntimeStatus.FAILED,
+                "task_partial_result",
+                RuntimeStatus.COMPLETED,
                 task_id=task_id,
                 progress=progress,
-                message_key="runtime.task.failed",
+                message_key="runtime.task.partial_result",
                 details=_result_details(result),
             )
             return
@@ -893,6 +992,82 @@ class AutonomousAgentRuntime:
                 visited_target_urls=tuple(sorted(visited_target_urls))[-20:],
                 budget=self._budget,
             )
+        )
+
+    async def _finalize_answer(
+        self,
+        *,
+        task: UserTask,
+        task_id: str,
+        observation: PageObservation | None,
+        visited_target_urls: set[str],
+        reason: str,
+    ) -> str:
+        finalization_task = (
+            f"{task.text}\n\nRuntime completion checkpoint: {reason} "
+            "Return the final or best-effort partial answer now. Use only collected evidence. "
+            "Do not request or call any tool. Include exact known URLs and clearly identify "
+            "facts that could not be verified."
+        )
+        reasoning = await self._reasoning_engine.reason(
+            ReasoningContext(
+                user_task=finalization_task,
+                observation=observation,
+                memory_summaries=self._memory_summaries(task_id),
+                available_tools=(),
+                security_constraints=self._security_constraints,
+                confirmation_constraints=self._confirmation_constraints,
+                visited_target_urls=tuple(sorted(visited_target_urls))[-20:],
+                final_answer_only=True,
+                budget=self._budget,
+            )
+        )
+        if reasoning.status is ReasoningStatus.ANSWER and reasoning.answer:
+            return reasoning.answer
+        return self._deterministic_partial_answer(task_id, reason)
+
+    def _deterministic_partial_answer(self, task_id: str, reason: str) -> str:
+        evidence = [
+            summary
+            for summary in self._memory_summaries(task_id)
+            if "http://" in summary or "https://" in summary
+        ]
+        if not evidence:
+            return (
+                "Не удалось сформировать полный ответ до защитной остановки. "
+                f"Причина: {reason}"
+            )
+        lines = "\n".join(f"- {item}" for item in evidence[:8])
+        return (
+            "Полный проход не завершен, но агент сохранил уже проверенные данные:\n"
+            f"{lines}\n\nПричина досрочного завершения: {reason}"
+        )
+
+    async def _partial_result_after_limit(
+        self,
+        *,
+        task: UserTask,
+        task_id: str,
+        observation: PageObservation | None,
+        visited_target_urls: set[str],
+        progress: AgentProgress,
+        plan: ExecutionPlan | None,
+        reason: str,
+    ) -> AgentTaskResult:
+        answer = await self._finalize_answer(
+            task=task,
+            task_id=task_id,
+            observation=observation,
+            visited_target_urls=visited_target_urls,
+            reason=reason,
+        )
+        return await self._complete_partial(
+            task_id,
+            task,
+            progress,
+            plan,
+            answer,
+            reason,
         )
 
     async def _needs_recovery(
@@ -1010,6 +1185,41 @@ class AutonomousAgentRuntime:
         )
         self._set_state(AgentState.COMPLETED, "Task produced a final answer.", task_id, progress)
         await self._remember_event(task_id, "task_completed", "Task completed successfully.")
+        return result
+
+    async def _complete_partial(
+        self,
+        task_id: str,
+        task: UserTask,
+        progress: AgentProgress,
+        plan: ExecutionPlan | None,
+        answer: str,
+        reason: str,
+    ) -> AgentTaskResult:
+        result = AgentTaskResult(
+            task_id=task_id,
+            task=task,
+            status=RuntimeStatus.COMPLETED,
+            final_state=AgentState.COMPLETED,
+            success=False,
+            termination_reason=TaskTerminationReason.PARTIAL_RESULT,
+            message=reason,
+            answer=answer,
+            iterations=progress.iteration,
+            failures=progress.failure_count,
+            plan=plan,
+        )
+        self._set_state(
+            AgentState.COMPLETED,
+            "Runtime returned collected evidence after a protective limit.",
+            task_id,
+            progress,
+        )
+        await self._remember_event(
+            task_id,
+            "task_partial_result",
+            "Runtime returned a best-effort partial result after a protective limit.",
+        )
         return result
 
     async def _wait_for_confirmation(
@@ -1232,6 +1442,22 @@ class AutonomousAgentRuntime:
                 source="runtime",
             )
         )
+        resource_summary = _resource_observation_summary(observation)
+        if resource_summary is not None and observation.url is not None:
+            resource_key = sha256(
+                repr(_target_identity(observation.url)).encode("utf-8")
+            ).hexdigest()[:16]
+            await self._update_memory(
+                MemoryRecord(
+                    key=f"resource_evidence_{resource_key}",
+                    value={"summary": resource_summary},
+                    scope=task_id,
+                    layer=MemoryLayer.TASK,
+                    kind=MemoryRecordKind.SUMMARY,
+                    importance=70,
+                    source="runtime_semantic_observation",
+                )
+            )
 
     async def _remember_reflection(
         self,
@@ -1703,6 +1929,116 @@ def _target_identity(url: str) -> tuple[str, str, str]:
     )
 
 
+_RESOURCE_COUNT_WORDS = {
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "две": 2,
+    "два": 2,
+    "три": 3,
+    "четыре": 4,
+    "пять": 5,
+    "шесть": 6,
+    "семь": 7,
+    "восемь": 8,
+    "девять": 9,
+    "десять": 10,
+}
+_RESOURCE_COUNT_NOUN_TERMS = (
+    "different",
+    "distinct",
+    "pages",
+    "items",
+    "results",
+    "links",
+    "jobs",
+    "vacancies",
+    "products",
+    "messages",
+    "emails",
+    "restaurants",
+    "разн",
+    "страниц",
+    "результат",
+    "ссыл",
+    "ваканс",
+    "товар",
+    "письм",
+    "сообщен",
+    "ресторан",
+    "вариант",
+)
+
+
+def _requested_distinct_resource_count(task_text: str) -> int | None:
+    normalized = " ".join(task_text.casefold().split())
+    action_terms = (
+        "find",
+        "open",
+        "read",
+        "compare",
+        "select",
+        "найд",
+        "открой",
+        "прочита",
+        "сравн",
+        "выбер",
+    )
+    if not any(term in normalized for term in action_terms):
+        return None
+    for match in re.finditer(r"\b\d{1,2}\b", normalized):
+        value = int(match.group())
+        if 2 <= value <= 20 and _count_followed_by_resource_term(normalized, match.end()):
+            return value
+    for word, value in _RESOURCE_COUNT_WORDS.items():
+        match = re.search(rf"(?<!\w){re.escape(word)}(?!\w)", normalized)
+        if match is not None and _count_followed_by_resource_term(normalized, match.end()):
+            return value
+    return None
+
+
+def _count_followed_by_resource_term(text: str, count_end: int) -> bool:
+    tail = text[count_end : count_end + 48]
+    return any(term in tail for term in _RESOURCE_COUNT_NOUN_TERMS)
+
+
+def _dominant_visited_resource_count(visited_target_urls: set[str]) -> int:
+    shapes = [
+        shape
+        for shape in (_url_resource_shape(url) for url in visited_target_urls)
+        if shape is not None
+    ]
+    if not shapes:
+        return 0
+    return max(Counter(shapes).values())
+
+
+def _resource_observation_summary(observation: PageObservation) -> str | None:
+    if observation.url is None or _url_resource_shape(observation.url) is None:
+        return None
+    parts = [
+        part.strip()
+        for part in (observation.title or "", observation.url, observation.summary)
+        if part and part.strip()
+    ]
+    seen = {part.casefold() for part in parts}
+    for section in observation.sections:
+        text = " ".join(section.text.split()).strip()
+        if len(text) < 20 or text.casefold() in seen:
+            continue
+        parts.append(text[:500])
+        seen.add(text.casefold())
+        if len(" | ".join(parts)) >= 1800 or len(parts) >= 7:
+            break
+    return " | ".join(parts)[:1900]
+
+
 def _has_useful_page_content(observation: PageObservation) -> bool:
     return bool(
         observation.sections
@@ -1790,6 +2126,8 @@ def _provider_error_details(error: LlmProviderError | None) -> Mapping[str, obje
 def _user_message_ru_for_result(result: AgentTaskResult) -> str:
     if result.termination_reason is TaskTerminationReason.ANSWERED:
         return "Задача завершена."
+    if result.termination_reason is TaskTerminationReason.PARTIAL_RESULT:
+        return "Защитный лимит достигнут. Агент вернул все проверенные данные, собранные к этому моменту."
     if result.termination_reason is TaskTerminationReason.CANCELLED:
         return "Задача отменена пользователем."
     if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:

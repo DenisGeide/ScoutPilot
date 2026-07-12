@@ -82,6 +82,7 @@ class ReasoningEngine:
             security_constraints=context.security_constraints,
             confirmation_constraints=context.confirmation_constraints,
             visited_target_urls=context.visited_target_urls,
+            final_answer_only=context.final_answer_only,
             budget=budgeted.budget,
         )
         request = LlmProviderRequest(
@@ -172,10 +173,18 @@ def _build_messages(
         "security_constraints": list(context.security_constraints),
         "confirmation_constraints": list(context.confirmation_constraints),
         "visited_target_urls": list(context.visited_target_urls),
+        "final_answer_only": context.final_answer_only,
         "budget": dict(context.budget),
         "context_metrics": dict(metrics.to_dict()) if metrics else None,
         "available_tool_names": [tool.name for tool in context.available_tools],
     }
+    finalization_instruction = (
+        " This request is final-answer-only. Do not call tools, do not ask for another "
+        "observation, and do not request confirmation. Produce the best concise answer from "
+        "the supplied observation and memory; state missing facts honestly."
+        if context.final_answer_only
+        else ""
+    )
     return (
         LlmMessage(
             role=LlmMessageRole.SYSTEM,
@@ -195,11 +204,13 @@ def _build_messages(
                 "use distinct target_url values from "
                 "the observation and never open the same target URL twice unless the user asks. "
                 "After reading a detail page, navigate to the remembered results-page URL and "
-                "choose a different unvisited target. "
+                "choose a different unvisited target. Prefer browser.back when it is available; "
+                "never emulate browser history with Alt+Left or another keyboard shortcut. "
                 "When listing found "
                 "pages, vacancies, products, messages or other linked items, preserve each exact "
                 "target_url from the observation and print the URL directly below that item. "
                 "Never invent, shorten or omit an available target URL."
+                f"{finalization_instruction}"
             ),
         ),
         LlmMessage(

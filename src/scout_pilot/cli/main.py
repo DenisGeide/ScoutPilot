@@ -1081,6 +1081,7 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
 def _menu_tool_action_ru(tool_name: str) -> str:
     return {
         "browser.navigate": "открываю страницу...",
+        "browser.back": "возвращаюсь к предыдущей странице...",
         "browser.observe": "проверяю, что видно на странице...",
         "browser.resolve_target": "ищу подходящий элемент на странице...",
         "browser.click": "нажимаю нужный элемент...",
@@ -1099,6 +1100,7 @@ def _menu_tool_done_ru(tool_name: str) -> str:
         return ""
     return {
         "browser.navigate": "страница открыта.",
+        "browser.back": "вернулся к предыдущей странице.",
         "browser.resolve_target": "нашел подходящий элемент.",
         "browser.click": "клик выполнен.",
         "browser.click_by_intent": "клик выполнен.",

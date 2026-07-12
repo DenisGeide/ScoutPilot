@@ -50,6 +50,39 @@ def test_tool_runtime_executes_success_and_records_structured_history(caplog):
     assert "tool_execution_finished" in caplog.text
 
 
+def test_browser_back_tool_uses_high_level_engine_history_api():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(browser=browser),
+    )
+
+    result = asyncio.run(
+        runtime.execute(ToolRequest(name="browser.back", arguments={}))
+    )
+
+    assert result.success is True
+    assert browser.actions == [("back",)]
+
+
+def test_press_key_normalizes_alt_left_history_alias_without_confirmation():
+    browser = FakeBrowser()
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(browser=browser, observation_engine=FakeObservationEngine()),
+    )
+
+    result = asyncio.run(
+        runtime.execute(
+            ToolRequest(name="browser.press_key", arguments={"key": "Alt+Left"})
+        )
+    )
+
+    assert result.success is True
+    assert result.status is ToolExecutionStatus.SUCCESS
+    assert browser.actions == [("press_key", "Alt+ArrowLeft")]
+
+
 def test_invalid_inputs_fail_before_browser_action():
     browser = FakeBrowser()
     runtime = DefaultToolRuntime(

@@ -30,6 +30,7 @@ _SENSITIVE_FIELD_HINTS = (
     "path",
 )
 _SAFE_BROWSER_TOOLS = {
+    "browser.back",
     "browser.navigate",
     "browser.observe",
     "browser.wait",
@@ -38,6 +39,8 @@ _SAFE_BROWSER_TOOLS = {
     "browser.plan_form_fill",
 }
 _SAFE_KEYS = {
+    "altarrowleft",
+    "altleft",
     "escape",
     "tab",
     "arrowup",
@@ -691,6 +694,8 @@ def _outcome_for_decision(decision: SecurityDecision) -> str:
 
 
 def _action_for_safe_tool(tool_name: str) -> str:
+    if tool_name == "browser.back":
+        return "вернуться на предыдущую страницу"
     if tool_name == "browser.navigate":
         return "открыть страницу"
     if tool_name == "browser.observe":

@@ -199,10 +199,20 @@ class PlaywrightBrowserEngine:
             return _not_started_result("go_back")
 
         try:
+            previous_url = page.url
             response = await page.go_back(
                 wait_until="domcontentloaded",
                 timeout=self._settings.navigation_timeout_ms,
             )
+            if (
+                response is None
+                and page.url == previous_url
+                and await self._return_to_previous_open_page(page)
+            ):
+                return await self._successful_action(
+                    "go_back",
+                    "Current popup closed and previous page activated.",
+                )
             http_failure = await self._http_status_failure("go_back", response)
             if http_failure is not None:
                 return http_failure
@@ -647,6 +657,33 @@ class PlaywrightBrowserEngine:
                     "error_type": type(exc).__name__,
                 },
             )
+
+    async def _return_to_previous_open_page(self, current_page: Any) -> bool:
+        context = self._context
+        if context is None:
+            return False
+        candidates = [
+            page
+            for page in context.pages
+            if page is not current_page and not page.is_closed()
+        ]
+        if not candidates:
+            return False
+        previous_page = candidates[-1]
+        await current_page.close()
+        self._page = previous_page
+        self._install_dialog_handler(previous_page)
+        try:
+            await previous_page.bring_to_front()
+        except PlaywrightError as exc:  # pragma: no cover - browser timing boundary
+            logger.info(
+                "previous_page_focus_failed",
+                extra={
+                    "event": "previous_page_focus_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+        return True
 
     async def _handle_unexpected_dialog(self, dialog: Any) -> None:
         dialog_type = str(getattr(dialog, "type", "dialog") or "dialog")

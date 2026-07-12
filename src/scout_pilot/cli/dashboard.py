@@ -350,6 +350,7 @@ def _action_label(action: str) -> str:
 def _tool_label(tool_name: str) -> str:
     labels = {
         "browser.navigate": "открытие страницы",
+        "browser.back": "возврат к предыдущей странице",
         "browser.observe": "наблюдение страницы",
         "browser.click": "нажатие элемента",
         "browser.click_by_intent": "нажатие по смысловому описанию",

@@ -840,6 +840,9 @@ def _redact_tool_arguments(
 def _result_message_ru(result) -> str:
     if result.termination_reason is TaskTerminationReason.ANSWERED:
         return result.answer or "Задача завершена."
+    if result.termination_reason is TaskTerminationReason.PARTIAL_RESULT:
+        answer = result.answer or "Проверенные данные не удалось восстановить."
+        return f"Защитный лимит достигнут. Показываю уже выполненную часть:\n\n{answer}"
     if result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
         if result.confirmation_request is not None:
             return _format_confirmation_notice(result.confirmation_request)

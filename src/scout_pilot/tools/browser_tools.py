@@ -93,6 +93,26 @@ class NavigateTool:
 
 
 @dataclass(frozen=True)
+class BackTool:
+    name: str = "browser.back"
+    description: str = (
+        "Return to the previous page in browser history without guessing keyboard shortcuts."
+    )
+    input_schema: ToolInputSchema = ToolInputSchema()
+    output_schema: ToolOutputSchema = _browser_action_output_schema()
+    timeout_seconds: float = 20.0
+
+    async def execute(
+        self,
+        arguments: dict[str, object],
+        context: ToolContext,
+    ) -> ToolExecutionOutcome:
+        browser = _require_browser(context)
+        result = await browser.go_back()
+        return _outcome_from_browser_action(result)
+
+
+@dataclass(frozen=True)
 class ClickTool:
     name: str = "browser.click"
     description: str = "Click a visible interactive element by semantic element ID."
@@ -560,7 +580,7 @@ class PressKeyTool:
         context: ToolContext,
     ) -> ToolExecutionOutcome:
         browser = _require_browser(context)
-        result = await browser.press_key(str(arguments["key"]))
+        result = await browser.press_key(_normalize_playwright_key(str(arguments["key"])))
         return _outcome_from_browser_action(result)
 
 
@@ -671,6 +691,7 @@ def create_browser_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     for tool in (
         NavigateTool(),
+        BackTool(),
         ClickTool(),
         FillTool(),
         ResolveSemanticTargetTool(),
@@ -690,6 +711,13 @@ def _require_browser(context: ToolContext):
     if context.browser is None:
         raise RuntimeError("Browser engine is not configured.")
     return context.browser
+
+
+def _normalize_playwright_key(key: str) -> str:
+    compact = key.casefold().replace("-", "+").replace(" ", "")
+    if compact in {"alt+left", "alt+arrowleft"}:
+        return "Alt+ArrowLeft"
+    return key
 
 
 def _require_observation_engine(context: ToolContext):

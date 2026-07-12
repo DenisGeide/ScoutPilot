@@ -264,6 +264,9 @@ def test_browser_adopts_each_new_tab_opened_by_semantic_link(tmp_path):
             first_result = await browser.click_by_semantic_id(first.element_id)
             first_state = await browser.current_state()
 
+            back_result = await browser.go_back()
+            returned_state = await browser.current_state()
+
             await browser.navigate_to(index_path.resolve().as_uri())
             observation = await observer.observe()
             second = next(
@@ -273,15 +276,31 @@ def test_browser_adopts_each_new_tab_opened_by_semantic_link(tmp_path):
             )
             second_result = await browser.click_by_semantic_id(second.element_id)
             second_state = await browser.current_state()
-            return first_result, first_state, second_result, second_state
+            return (
+                first_result,
+                first_state,
+                back_result,
+                returned_state,
+                second_result,
+                second_state,
+            )
         finally:
             await browser.stop()
 
-    first_result, first_state, second_result, second_state = asyncio.run(scenario())
+    (
+        first_result,
+        first_state,
+        back_result,
+        returned_state,
+        second_result,
+        second_state,
+    ) = asyncio.run(scenario())
 
     assert first_result.success is True
     assert first_result.url == first_path.resolve().as_uri()
     assert first_state.title == "First vacancy"
+    assert back_result.success is True
+    assert returned_state.title == "Vacancies"
     assert second_result.success is True
     assert second_result.url == second_path.resolve().as_uri()
     assert second_state.title == "Second vacancy"

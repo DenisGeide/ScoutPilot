@@ -9,7 +9,7 @@ from typing import Mapping
 from scout_pilot.models import ExecutionPlan, RuntimeStatus, UserTask
 
 
-DEFAULT_MAX_AGENT_STEPS = 40
+DEFAULT_MAX_AGENT_STEPS = 128
 
 
 class AgentState(str, Enum):
@@ -32,6 +32,7 @@ class TaskTerminationReason(str, Enum):
     """Explainable termination reasons for a task."""
 
     ANSWERED = "answered"
+    PARTIAL_RESULT = "partial_result"
     CANCELLED = "cancelled"
     WAITING_FOR_CONFIRMATION = "waiting_for_confirmation"
     MAX_ITERATIONS_EXCEEDED = "max_iterations_exceeded"
@@ -50,6 +51,7 @@ class RuntimeSettings:
     max_failures: int = 5
     max_repeated_targets: int = 6
     max_memory_summaries: int = 10
+    max_elapsed_seconds: float = 240.0
 
 
 @dataclass(frozen=True)

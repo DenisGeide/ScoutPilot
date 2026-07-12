@@ -149,6 +149,7 @@ class ReasoningContext:
     security_constraints: tuple[str, ...] = ()
     confirmation_constraints: tuple[str, ...] = ()
     visited_target_urls: tuple[str, ...] = ()
+    final_answer_only: bool = False
     budget: Mapping[str, int] = field(default_factory=dict)
 
     def __init__(
@@ -160,6 +161,7 @@ class ReasoningContext:
         security_constraints: Sequence[str] = (),
         confirmation_constraints: Sequence[str] = (),
         visited_target_urls: Sequence[str] = (),
+        final_answer_only: bool = False,
         budget: Mapping[str, int] | None = None,
     ) -> None:
         if not user_task.strip():
@@ -171,6 +173,7 @@ class ReasoningContext:
         object.__setattr__(self, "security_constraints", tuple(security_constraints))
         object.__setattr__(self, "confirmation_constraints", tuple(confirmation_constraints))
         object.__setattr__(self, "visited_target_urls", tuple(visited_target_urls))
+        object.__setattr__(self, "final_answer_only", final_answer_only)
         object.__setattr__(self, "budget", dict(budget or {}))
 
 
