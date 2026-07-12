@@ -73,6 +73,14 @@ class PlaywrightBrowserEngine:
                 headless=self._settings.headless,
                 timeout=self._settings.default_timeout_ms,
                 slow_mo=self._settings.slow_mo_ms,
+                args=(
+                    [
+                        "--window-size="
+                        f"{self._settings.viewport_width},{self._settings.viewport_height}"
+                    ]
+                    if not self._settings.headless
+                    else []
+                ),
                 viewport={
                     "width": self._settings.viewport_width,
                     "height": self._settings.viewport_height,

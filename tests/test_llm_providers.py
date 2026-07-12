@@ -26,7 +26,7 @@ from scout_pilot.llm import (
 from scout_pilot.llm.anthropic_provider import AnthropicLlmProvider
 from scout_pilot.llm.openai_provider import OpenAILlmProvider
 from scout_pilot.llm.types import LlmProviderError
-from scout_pilot.models import PageObservation, SemanticSection
+from scout_pilot.models import InteractiveElement, PageObservation, SemanticSection
 from scout_pilot.tools import create_browser_tool_registry
 
 
@@ -322,6 +322,58 @@ def test_reasoning_engine_handles_provider_failure_and_unknown_tool():
     assert provider_failure.provider_error.code is LlmErrorCode.TIMEOUT
     assert unknown_tool.status is ReasoningStatus.FAILURE
     assert "unknown tool" in unknown_tool.message.lower()
+
+
+def test_reasoning_engine_preserves_visible_item_urls_in_answer():
+    provider = MockLlmProvider(
+        [
+            LlmProviderResult(
+                success=True,
+                response=LlmProviderResponse(
+                    content="1. AI Engineer\n2. LLM Engineer"
+                ),
+            )
+        ]
+    )
+    engine = ReasoningEngine(provider)
+    observation = PageObservation(
+        url="https://example.test/jobs",
+        title="Jobs",
+        summary="Two jobs.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_ai",
+                role="link",
+                accessible_name="AI Engineer",
+                visible_text="AI Engineer",
+                target_url="https://example.test/jobs/ai-engineer",
+            ),
+            InteractiveElement(
+                element_id="el_llm",
+                role="link",
+                accessible_name="LLM Engineer",
+                visible_text="LLM Engineer",
+                target_url="https://example.test/jobs/llm-engineer",
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        engine.reason(
+            ReasoningContext(
+                user_task="List visible jobs with links.",
+                observation=observation,
+            )
+        )
+    )
+
+    assert result.status is ReasoningStatus.ANSWER
+    assert "https://example.test/jobs/ai-engineer" in result.answer
+    assert "https://example.test/jobs/llm-engineer" in result.answer
+    assert "Ссылки:" in result.answer
+    system_message = provider.requests[0].messages[0].content
+    assert "exact target_url" in system_message
+    assert "Never repeat observation or wait" in system_message
 
 
 def test_reasoning_engine_normalizes_provider_exceptions_and_malformed_tool_arguments():

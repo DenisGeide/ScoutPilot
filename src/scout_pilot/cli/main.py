@@ -1027,6 +1027,8 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
     name = str(getattr(event, "name", ""))
     details = dict(getattr(event, "details", {}))
     if name == "observation_captured":
+        if not debug_output:
+            return ""
         title = str(details.get("title") or "").strip()
         return f"вижу страницу: {title}." if title else "смотрю страницу."
     if name == "page_blocker_detected":
@@ -1068,7 +1070,7 @@ def _menu_tool_action_ru(tool_name: str) -> str:
         "browser.fill_by_label": "заполняю поле по смысловой подписи...",
         "browser.plan_form_fill": "сопоставляю поля формы с задачей...",
         "browser.press_key": "нажимаю клавишу...",
-        "browser.wait": "жду, пока страница обновится...",
+        "browser.wait": "жду завершения загрузки данных...",
         "browser.screenshot": "делаю диагностический снимок...",
     }.get(tool_name, "выполняю действие...")
 
@@ -1085,7 +1087,7 @@ def _menu_tool_done_ru(tool_name: str) -> str:
         "browser.fill_by_label": "текст введен.",
         "browser.plan_form_fill": "поля формы сопоставлены.",
         "browser.press_key": "клавиша нажата.",
-        "browser.wait": "страница обновилась.",
+        "browser.wait": "ожидание завершено.",
         "browser.screenshot": "снимок сохранен.",
     }.get(tool_name, "готово.")
 

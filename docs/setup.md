@@ -56,6 +56,8 @@ Copy-Item .env.example .env
 | `SCOUT_PILOT_BROWSER_DEFAULT_TIMEOUT_MS` | Таймаут обычных browser actions | `10000` |
 | `SCOUT_PILOT_BROWSER_NAVIGATION_TIMEOUT_MS` | Таймаут навигации | `15000` |
 | `SCOUT_PILOT_BROWSER_SCREENSHOTS_DIR` | Папка диагностических скриншотов | `reports/tmp/screenshots` |
+| `SCOUT_PILOT_BROWSER_VIEWPORT_WIDTH` | Ширина viewport и headed-окна | `1000` |
+| `SCOUT_PILOT_BROWSER_VIEWPORT_HEIGHT` | Высота viewport и headed-окна | `900` |
 | `SCOUT_PILOT_LLM_PROVIDER` | Провайдер для live-режима, если не передан `--provider` | `openai` |
 | `SCOUT_PILOT_LLM_MODEL` | Имя модели, совместимое с выбранным провайдером | `gpt-4.1-mini` |
 | `OPENAI_API_KEY` | Локальный ключ OpenAI, если нужен | пусто |

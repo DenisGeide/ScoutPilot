@@ -1,6 +1,7 @@
 import json
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
@@ -64,6 +65,22 @@ def test_menu_chat_mode_collects_url_without_starting_real_browser(monkeypatch, 
     assert exit_code == 0
     assert "Чат с агентом" in captured.out
     assert calls == [("https://hh.ru", "codex")]
+
+
+def test_menu_chat_hides_repeated_observation_noise_and_uses_honest_wait_text():
+    cli_main = importlib.import_module("scout_pilot.cli.main")
+    observation = SimpleNamespace(
+        name="observation_captured",
+        details={"title": "Search results"},
+    )
+
+    assert cli_main._menu_chat_event_message(observation, debug_output=False) == ""
+    assert "Search results" in cli_main._menu_chat_event_message(
+        observation,
+        debug_output=True,
+    )
+    assert cli_main._menu_tool_action_ru("browser.wait") == "жду завершения загрузки данных..."
+    assert cli_main._menu_tool_done_ru("browser.wait") == "ожидание завершено."
 
 
 def test_menu_url_normalization_accepts_plain_domain():

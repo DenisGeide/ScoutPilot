@@ -21,7 +21,7 @@ class BrowserEngineConfig:
     default_timeout_ms: int = 10000
     navigation_timeout_ms: int = 15000
     screenshots_dir: Path = Path("reports/tmp/screenshots")
-    viewport_width: int = 1280
+    viewport_width: int = 1000
     viewport_height: int = 900
     slow_mo_ms: int = 0
 
@@ -33,6 +33,8 @@ class BrowserEngineConfig:
             default_timeout_ms=config.browser_default_timeout_ms,
             navigation_timeout_ms=config.browser_navigation_timeout_ms,
             screenshots_dir=config.browser_screenshots_dir,
+            viewport_width=config.browser_viewport_width,
+            viewport_height=config.browser_viewport_height,
         )
 
     def __post_init__(self) -> None:

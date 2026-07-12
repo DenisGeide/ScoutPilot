@@ -137,6 +137,7 @@ class AutonomousAgentRuntime:
         task_id = uuid4().hex
         progress = _progress(0, self._settings, 0, None)
         observation: PageObservation | None = None
+        previous_observation_signature: tuple[object, ...] | None = None
         plan: ExecutionPlan | None = None
         failure_count = 0
         self._state = AgentState.IDLE
@@ -170,6 +171,18 @@ class AutonomousAgentRuntime:
                 )
                 yield transition
                 observation = await self._observation_engine.observe()
+                observation_signature = _observation_signature(observation)
+                if observation_signature == previous_observation_signature:
+                    await self._remember_event(
+                        task_id,
+                        f"observation_unchanged_{iteration}",
+                        (
+                            "The semantic observation is unchanged. Do not request another "
+                            "observation or browser.wait; answer from available evidence or "
+                            "choose a different semantic tool."
+                        ),
+                    )
+                previous_observation_signature = observation_signature
                 await self._remember_observation(
                     task_id,
                     iteration,
@@ -463,6 +476,9 @@ class AutonomousAgentRuntime:
                     progress,
                 )
                 post_action_observation = await self._observation_engine.observe()
+                previous_observation_signature = _observation_signature(
+                    post_action_observation
+                )
                 await self._remember_observation(
                     task_id,
                     iteration,
@@ -1402,6 +1418,17 @@ def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object]
             safe_dismiss_allowed=False,
         )
     return None
+
+
+def _observation_signature(observation: PageObservation) -> tuple[object, ...]:
+    return (
+        observation.url,
+        observation.title,
+        tuple(section.section_id for section in observation.sections),
+        tuple(element.element_id for element in observation.interactive_elements),
+        tuple((field.field_id, field.value_state) for field in observation.form_fields),
+        tuple(issue.code.value for issue in observation.issues),
+    )
 
 
 def _has_useful_page_content(observation: PageObservation) -> bool:

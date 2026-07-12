@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from scout_pilot.context import (
     ContextBudgetSettings,
@@ -23,7 +25,7 @@ from scout_pilot.llm.types import (
     ReasoningContext,
     ReasoningResult,
 )
-from scout_pilot.models import ToolRequest
+from scout_pilot.models import PageObservation, ToolRequest
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +155,9 @@ class ReasoningEngine:
             return ReasoningResult.needs_observation(content.split(":", 1)[1].strip())
         if lowered.startswith("need_confirmation:"):
             return ReasoningResult.needs_confirmation(content.split(":", 1)[1].strip())
-        return ReasoningResult.answer(content)
+        return ReasoningResult.answer(
+            _append_missing_observation_urls(content, budgeted_context.observation)
+        )
 
 
 def _build_messages(
@@ -179,7 +183,14 @@ def _build_messages(
                 "Never assume access to raw HTML, DOM dumps, cookies, tokens, browser profiles "
                 "or private files. If a tool is needed, call exactly one available tool. "
                 "If more page state is required, answer with NEED_OBSERVATION: <reason>. "
-                "If user confirmation is required, answer with NEED_CONFIRMATION: <reason>."
+                "If user confirmation is required, answer with NEED_CONFIRMATION: <reason>. "
+                "Do not request another observation or browser.wait only because the observation "
+                "is truncated when relevant visible sections or interactive elements are already "
+                "available. Never repeat observation or wait on an unchanged page; answer from "
+                "the available evidence or choose a different semantic tool. When listing found "
+                "pages, vacancies, products, messages or other linked items, preserve each exact "
+                "target_url from the observation and print the URL directly below that item. "
+                "Never invent, shorten or omit an available target URL."
             ),
         ),
         LlmMessage(
@@ -187,3 +198,42 @@ def _build_messages(
             content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
         ),
     )
+
+
+def _append_missing_observation_urls(
+    answer: str,
+    observation: PageObservation | None,
+) -> str:
+    if observation is None:
+        return answer
+
+    normalized_answer = _normalize_for_match(answer)
+    seen_urls: set[str] = set()
+    missing: list[tuple[str, str]] = []
+    for element in observation.interactive_elements:
+        name = (element.accessible_name or element.visible_text or "").strip()
+        url = (element.target_url or "").strip()
+        if len(name) < 4 or not _is_public_web_url(url):
+            continue
+        if url in answer or url in seen_urls:
+            continue
+        if _normalize_for_match(name) not in normalized_answer:
+            continue
+        seen_urls.add(url)
+        missing.append((name, url))
+        if len(missing) >= 10:
+            break
+
+    if not missing:
+        return answer
+    links = "\n".join(f"- {name}: {url}" for name, url in missing)
+    return f"{answer.rstrip()}\n\nСсылки:\n{links}"
+
+
+def _normalize_for_match(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().casefold()
+
+
+def _is_public_web_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)

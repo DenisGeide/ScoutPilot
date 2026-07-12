@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
@@ -159,6 +160,34 @@ def test_runtime_stops_at_max_iterations():
     assert runtime.last_result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED
     assert events[-1].name == "task_failed"
     assert events[-1].details["termination_reason"] == "max_iterations_exceeded"
+
+
+def test_runtime_marks_unchanged_observation_before_second_reasoning_request():
+    provider = MockLlmProvider(
+        [
+            _text_result("NEED_OBSERVATION: verify current results"),
+            _text_result("Enough evidence is visible."),
+        ]
+    )
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([]),
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=3, max_failures=1),
+        observation_engine=StaticObservationEngine(),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Read stable results"))))
+    second_payload = json.loads(provider.requests[1].messages[1].content)
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert any(
+        "semantic observation is unchanged" in summary.casefold()
+        for summary in second_payload["memory_summaries"]
+    )
+    assert sum(event.name == "observation_captured" for event in events) == 2
 
 
 def test_runtime_replans_when_semantic_element_disappears():

@@ -39,6 +39,8 @@ class AppConfig:
     browser_default_timeout_ms: int = 10000
     browser_navigation_timeout_ms: int = 15000
     browser_screenshots_dir: Path = Path("reports/tmp/screenshots")
+    browser_viewport_width: int = 1000
+    browser_viewport_height: int = 900
     observation_max_sections: int = 12
     observation_max_interactive_elements: int = 60
     observation_max_form_fields: int = 25
@@ -82,6 +84,14 @@ class AppConfig:
             ),
             browser_screenshots_dir=Path(
                 values.get("SCOUT_PILOT_BROWSER_SCREENSHOTS_DIR", "reports/tmp/screenshots")
+            ),
+            browser_viewport_width=_parse_positive_int(
+                values.get("SCOUT_PILOT_BROWSER_VIEWPORT_WIDTH", "1000"),
+                variable_name="SCOUT_PILOT_BROWSER_VIEWPORT_WIDTH",
+            ),
+            browser_viewport_height=_parse_positive_int(
+                values.get("SCOUT_PILOT_BROWSER_VIEWPORT_HEIGHT", "900"),
+                variable_name="SCOUT_PILOT_BROWSER_VIEWPORT_HEIGHT",
             ),
             observation_max_sections=_parse_positive_int(
                 values.get("SCOUT_PILOT_OBSERVATION_MAX_SECTIONS", "12"),

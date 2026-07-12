@@ -182,6 +182,7 @@ scout-pilot interview-demo --headless --slow-mo-ms 0 --wait-after-search-ms 50
 - [Техническая защита проекта](docs/technical_defense.md)
 - [Release checklist](docs/release_checklist.md)
 - [Interview demo](docs/interview_demo.md)
+- [Сценарий видео на 3–5 минут](docs/video_script.md)
 - [Ручной smoke-тест HH.ru](docs/hh_demo.md)
 - [Как вносить изменения](CONTRIBUTING.md)
 
