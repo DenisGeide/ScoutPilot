@@ -3,6 +3,7 @@ from pathlib import Path
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
+from scout_pilot.cli.main import _normalize_menu_start_url
 
 
 def test_status_command_prints_russian_placeholder(capsys):
@@ -16,6 +17,59 @@ def test_status_command_prints_russian_placeholder(capsys):
     assert "слой demo/reporting" in captured.out
     assert "Semantic Observation Engine" in captured.out
     assert "scout-pilot run" in captured.out
+
+
+def test_menu_command_parses_launcher_defaults():
+    parser = build_parser()
+
+    args = parser.parse_args(["menu"])
+
+    assert args.command == "menu"
+    assert args.provider == "mock"
+    assert args.dashboard == "verbose"
+    assert args.max_iterations == 8
+    assert args.headless is False
+
+
+def test_menu_opens_and_exits_without_starting_browser(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt: "9")
+
+    exit_code = main(["menu"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Scout Pilot - меню запуска" in captured.out
+    assert "0 - Быстрый режим" in captured.out
+    assert "Меню закрыто" in captured.out
+
+
+def test_menu_fast_mode_can_exit_before_starting_browser(monkeypatch, capsys):
+    answers = iter(["0", "", "/exit", "9"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    exit_code = main(["menu"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Быстрый режим" in captured.out
+    assert "URL не указан" in captured.out
+    assert "Быстрый режим закрыт" in captured.out
+
+
+def test_menu_url_normalization_accepts_plain_domain():
+    normalized, error = _normalize_menu_start_url("hh.ru")
+
+    assert normalized == "https://hh.ru"
+    assert error is None
+
+
+def test_menu_url_normalization_rejects_prompt_text():
+    normalized, error = _normalize_menu_start_url("Стартовый URL:")
+
+    assert normalized is None
+    assert "настоящий URL" in str(error)
 
 
 def test_demo_vacancy_search_command_requires_start_url():

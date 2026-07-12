@@ -10,6 +10,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 from scout_pilot.config import AppConfig
 
@@ -31,6 +32,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status", help="Показать готовность проекта и доступные команды.")
+
+    menu_parser = subparsers.add_parser(
+        "menu",
+        help="Открыть удобное меню запуска без длинных команд.",
+    )
+    menu_parser.add_argument(
+        "--provider",
+        choices=("mock", "openai", "anthropic"),
+        default="mock",
+        help="Провайдер по умолчанию для live-запуска из меню.",
+    )
+    menu_parser.add_argument(
+        "--dashboard",
+        choices=("compact", "verbose", "off"),
+        default="verbose",
+        help="Насколько подробно показывать ход выполнения из меню.",
+    )
+    menu_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=8,
+        help="Максимум observe/think/tool итераций для live-запуска из меню.",
+    )
+    menu_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Запускать браузер без видимого окна. Для демо обычно не нужно.",
+    )
 
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -470,6 +499,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_status(config)
         return 0
 
+    if args.command == "menu":
+        try:
+            return asyncio.run(_run_menu(args))
+        except KeyboardInterrupt:
+            print("Меню закрыто пользователем.")
+            return 130
+
     if args.command == "doctor":
         return asyncio.run(_run_doctor(args))
 
@@ -532,6 +568,7 @@ def _print_status(config: AppConfig) -> None:
         "Live-режим запускается через scout-pilot run \"текст задачи\" --live "
         "--start-url <URL>. Для детерминированной проверки используйте --provider mock."
     )
+    print("Удобный режим без длинных команд доступен через scout-pilot menu.")
     print("Локальное scripted demo доступно через scout-pilot interview-demo.")
     print("Основное runtime demo доступно через scout-pilot live-local-demo.")
     print("Синтетическое почтовое demo доступно через scout-pilot mail-spam-demo.")
@@ -546,6 +583,343 @@ def _print_status(config: AppConfig) -> None:
     print(f"LLM-провайдер: {config.llm_provider}. Модель: {config.llm_model}.")
     mode = "без видимого окна" if config.browser_headless else "с видимым окном"
     print(f"Режим браузера по умолчанию: {mode}.")
+
+
+_MENU_DEFAULT_TASK = (
+    "Найди три подходящие AI Engineer вакансии, прочитай описания, "
+    "сравни требования и остановись перед откликом."
+)
+
+
+def _menu_lines() -> tuple[str, ...]:
+    return (
+        "",
+        "Scout Pilot - меню запуска",
+        "0 - Быстрый режим: URL сайта -> задачи -> ответы агента",
+        "1 - Локальное demo вакансий через реальный runtime",
+        "2 - Открыть persistent profile для ручного входа",
+        "3 - Проверить live-провайдера OpenAI/Anthropic",
+        "4 - Показать краткую сводку последнего report/replay",
+        "5 - Проверить окружение командой doctor",
+        "6 - Быстро проверить запуск браузера",
+        "7 - Локальное demo: почта и остановка перед spam/delete",
+        "8 - Локальное demo: заказ еды и остановка перед оплатой",
+        "9 - Выйти",
+    )
+
+
+async def _run_menu(args: argparse.Namespace) -> int:
+    print("Открываю меню Scout Pilot. Для демо браузер запускается видимым по умолчанию.")
+    while True:
+        for line in _menu_lines():
+            print(line)
+        choice = _menu_read("Выберите пункт: ").strip().casefold()
+        if choice in {"", "9", "q", "quit", "exit", "выход"}:
+            print("Меню закрыто.")
+            return 0
+        if choice == "0":
+            await _menu_run_agent(args)
+            continue
+        if choice == "1":
+            await _menu_run_live_local_demo(args)
+            continue
+        if choice == "2":
+            await _menu_open_profile(args)
+            continue
+        if choice == "3":
+            await _menu_provider_smoke()
+            continue
+        if choice == "4":
+            _menu_show_latest_replay()
+            continue
+        if choice == "5":
+            await _run_doctor(argparse.Namespace(provider=None))
+            continue
+        if choice == "6":
+            await _run_browser_smoke(
+                argparse.Namespace(
+                    url=None,
+                    headless=bool(args.headless),
+                    headed=not bool(args.headless),
+                    hold_seconds=3.0,
+                )
+            )
+            continue
+        if choice == "7":
+            await _run_mail_spam_demo(_menu_demo_namespace("mail-spam", args))
+            continue
+        if choice == "8":
+            await _run_food_order_demo(_menu_demo_namespace("food-order", args))
+            continue
+        print("Не понял пункт меню. Введите число от 0 до 9.")
+
+
+async def _menu_run_agent(args: argparse.Namespace) -> int:
+    print("")
+    print("Быстрый режим: сначала укажите сайт, потом пишите задачи обычным текстом.")
+    print("Команды внутри режима: /url - сменить сайт, /report - последний отчет, /exit - выйти.")
+    start_url = _menu_prompt_start_url()
+    provider = _menu_fast_provider(args, start_url)
+    if start_url is None:
+        print("URL не указан: задачи будут запускаться на локальном безопасном demo-сайте.")
+    else:
+        print(f"Стартовый сайт: {start_url}")
+    print(f"Провайдер: {provider}. Вывод: {args.dashboard}. Итераций на задачу: {args.max_iterations}.")
+
+    while True:
+        task = _menu_read("Задача > ").strip()
+        normalized_task = task.casefold()
+        if normalized_task in {"", "help", "/help", "?"}:
+            print("Напишите задачу, например: найди три вакансии и сравни требования.")
+            print("Команды: /url, /report, /exit.")
+            continue
+        if normalized_task in {"9", "exit", "quit", "/exit", "выход"}:
+            print("Быстрый режим закрыт.")
+            return 0
+        if normalized_task == "/url":
+            start_url = _menu_prompt_start_url()
+            provider = _menu_fast_provider(args, start_url)
+            if start_url is None:
+                print("Теперь используется локальный demo-сайт.")
+            else:
+                print(f"Новый стартовый сайт: {start_url}")
+            continue
+        if normalized_task == "/report":
+            _menu_show_latest_replay()
+            continue
+
+        await _menu_run_one_agent_task(
+            args,
+            task=task,
+            start_url=start_url,
+            provider=provider,
+        )
+        print("Готово. Можно написать следующую задачу, сменить сайт через /url или выйти через /exit.")
+
+
+def _menu_prompt_start_url() -> str | None:
+    while True:
+        raw_url = _menu_read(
+            "URL сайта (например https://hh.ru, Enter - локальный demo): "
+        ).strip()
+        start_url, error = _normalize_menu_start_url(raw_url)
+        if error is None:
+            return start_url
+        print(error)
+
+
+def _normalize_menu_start_url(raw_url: str) -> tuple[str | None, str | None]:
+    value = raw_url.strip()
+    if not value:
+        return None, None
+    lowered = value.casefold()
+    if lowered in {"9", "exit", "quit", "/exit", "выход"}:
+        return None, None
+    if " " in value or lowered.rstrip(":") in {"url", "стартовый url", "сайт"}:
+        return None, "Введите настоящий URL, например https://hh.ru, или нажмите Enter для demo."
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, "URL должен начинаться с http:// или https://, например https://hh.ru."
+    return value, None
+
+
+def _menu_fast_provider(args: argparse.Namespace, start_url: str | None) -> str:
+    if args.provider != "mock":
+        return args.provider
+    config = AppConfig.load()
+    if start_url and config.provider_secrets.has_openai_key:
+        print("В .env найден OPENAI_API_KEY, для живого сайта автоматически выбран OpenAI.")
+        return "openai"
+    if start_url:
+        print(
+            "Сейчас выбран provider mock. Для настоящего сайта он подходит только для безопасной "
+            "проверки запуска; для реального рассуждения добавьте OPENAI_API_KEY или запустите "
+            "scout-pilot menu --provider openai."
+        )
+    return "mock"
+
+
+async def _menu_run_one_agent_task(
+    args: argparse.Namespace,
+    *,
+    task: str,
+    start_url: str | None,
+    provider: str,
+) -> int:
+    if start_url is None:
+        print("Запускаю локальное demo через обычный автономный runtime.")
+        return await _run_live_local_demo(
+            argparse.Namespace(
+                task=[task],
+                provider=provider,
+                dashboard=args.dashboard,
+                max_iterations=args.max_iterations,
+                site_dir=None,
+                profile_dir=None,
+                report_path=None,
+                replay_path=None,
+                headless=bool(args.headless),
+                headed=not bool(args.headless),
+                slow_mo_ms=120,
+            )
+        )
+
+    print("Запускаю задачу через Browser Engine, Tool Runtime и Autonomous Runtime.")
+    return await _run_task(
+        argparse.Namespace(
+            task=[task],
+            live=True,
+            report_path=None,
+            replay_path=None,
+            dashboard=args.dashboard,
+            start_url=start_url,
+            provider=provider,
+            max_iterations=args.max_iterations,
+            headless=bool(args.headless),
+            headed=not bool(args.headless),
+        )
+    )
+
+
+async def _menu_run_live_local_demo(args: argparse.Namespace) -> int:
+    task = _menu_read(
+        "Задача demo (Enter - стандартная задача про AI Engineer вакансии): "
+    ).strip()
+    if not task:
+        task = _MENU_DEFAULT_TASK
+    provider = _menu_choice(
+        "Провайдер",
+        ("mock", "openai", "anthropic"),
+        default=args.provider,
+    )
+    print("Запускаю видимый браузер и локальный сайт. Внешние заявки не отправляются.")
+    return await _run_live_local_demo(
+        argparse.Namespace(
+            task=[task],
+            provider=provider,
+            dashboard=args.dashboard,
+            max_iterations=args.max_iterations,
+            site_dir=None,
+            profile_dir=None,
+            report_path=None,
+            replay_path=None,
+            headless=bool(args.headless),
+            headed=not bool(args.headless),
+            slow_mo_ms=120,
+        )
+    )
+
+
+async def _menu_open_profile(args: argparse.Namespace) -> int:
+    profile = _menu_read("Имя профиля (Enter - default): ").strip() or "default"
+    start_url = _menu_read("URL для ручного входа (Enter - https://hh.ru): ").strip()
+    if not start_url:
+        start_url = "https://hh.ru"
+    print("Открою persistent profile. Войдите вручную, затем закройте браузер или нажмите Enter.")
+    return await _run_profile_open(
+        argparse.Namespace(
+            profile=profile,
+            start_url=start_url,
+            headless=bool(args.headless),
+            headed=not bool(args.headless),
+            hold_seconds=None,
+        )
+    )
+
+
+async def _menu_provider_smoke() -> int:
+    provider = _menu_choice(
+        "Провайдер для smoke-проверки",
+        ("openai", "anthropic"),
+        default="openai",
+    )
+    return await _run_provider_smoke(argparse.Namespace(provider=provider))
+
+
+def _menu_show_latest_replay() -> int:
+    path_text = _menu_read(
+        "Путь к report/replay (Enter - последний replay из reports/tmp): "
+    ).strip()
+    path = Path(path_text) if path_text else _latest_replay_path()
+    if path is None:
+        print("Replay пока не найден. Сначала запустите demo или live-задачу.")
+        return 1
+    print(f"Показываю безопасную сводку: {path}")
+    return _run_replay_summary(argparse.Namespace(path=str(path)))
+
+
+def _latest_replay_path() -> Path | None:
+    config = AppConfig.load()
+    report_dir = config.reports_dir / "tmp"
+    if not report_dir.exists():
+        return None
+    candidates = [
+        path
+        for path in report_dir.rglob("*.json")
+        if "replay" in path.name.casefold()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _menu_demo_namespace(kind: str, args: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(
+        site_dir=None,
+        profile_dir=None,
+        report_path=None,
+        replay_path=None,
+        headless=bool(args.headless),
+        headed=not bool(args.headless),
+        slow_mo_ms=120,
+        kind=kind,
+    )
+
+
+def _menu_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
+    choices_text = "/".join(choices)
+    while True:
+        value = (
+            _menu_read(f"{label} [{choices_text}] (Enter - {default}): ")
+            .strip()
+            .casefold()
+        )
+        if not value:
+            return default
+        if value in choices:
+            return value
+        print(f"Введите одно из значений: {choices_text}.")
+
+
+def _menu_int(
+    label: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    while True:
+        value = _menu_read(f"{label} (Enter - {default}): ").strip()
+        if not value:
+            return default
+        try:
+            number = int(value)
+        except ValueError:
+            print("Введите число.")
+            continue
+        if minimum <= number <= maximum:
+            return number
+        print(f"Введите число от {minimum} до {maximum}.")
+
+
+def _menu_read(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except EOFError:
+        print("Меню требует интерактивного ввода. Завершаю без запуска действий.")
+        return "9"
 
 
 async def _run_doctor(args: argparse.Namespace) -> int:
