@@ -138,6 +138,7 @@ class AutonomousAgentRuntime:
         progress = _progress(0, self._settings, 0, None)
         observation: PageObservation | None = None
         previous_observation_signature: tuple[object, ...] | None = None
+        visited_target_urls: set[str] = set()
         plan: ExecutionPlan | None = None
         failure_count = 0
         self._state = AgentState.IDLE
@@ -404,6 +405,7 @@ class AutonomousAgentRuntime:
 
                 selected_tool = reasoning.selected_tool
                 selected_plan_step = _find_plan_step(plan, selected_tool)
+                selected_target_url = _target_url_for_tool(observation, selected_tool)
                 yield self._event(
                     "tool_selected",
                     RuntimeStatus.RUNNING,
@@ -420,6 +422,51 @@ class AutonomousAgentRuntime:
                         "next_action": "execute_tool",
                     },
                 )
+                if selected_target_url and selected_target_url in visited_target_urls:
+                    failure_count += 1
+                    progress = _progress(iteration, self._settings, failure_count, plan)
+                    message = (
+                        "Repeated navigation to an already visited target URL was blocked. "
+                        "Choose a different unvisited semantic result or answer from memory."
+                    )
+                    await self._remember_event(
+                        task_id,
+                        f"repeated_target_blocked_{iteration}",
+                        f"{message} URL: {selected_target_url}",
+                    )
+                    yield self._event(
+                        "repeated_target_blocked",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.tool.repeated_target_blocked",
+                        details={
+                            "tool_name": selected_tool.name,
+                            "target_url": selected_target_url,
+                            "next_action": "choose_unvisited_target_or_answer",
+                        },
+                    )
+                    if failure_count >= self._settings.max_failures:
+                        result = await self._fail(
+                            task_id,
+                            task,
+                            progress,
+                            plan,
+                            TaskTerminationReason.MAX_FAILURES_EXCEEDED,
+                            message,
+                            failure_count,
+                        )
+                        self.last_result = result
+                        yield self._event(
+                            "task_failed",
+                            RuntimeStatus.FAILED,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.task.failed",
+                            details=_result_details(result),
+                        )
+                        return
+                    continue
                 yield self._transition(
                     AgentState.EXECUTING,
                     f"Execute selected tool {selected_tool.name}.",
@@ -427,6 +474,8 @@ class AutonomousAgentRuntime:
                     progress,
                 )
                 tool_result = await self._tool_runtime.execute(selected_tool)
+                if tool_result.success and selected_target_url:
+                    visited_target_urls.add(selected_target_url)
                 await self._remember_tool_result(task_id, tool_result)
                 progress = _progress(iteration, self._settings, failure_count, plan)
                 yield self._event(
@@ -1429,6 +1478,32 @@ def _observation_signature(observation: PageObservation) -> tuple[object, ...]:
         tuple((field.field_id, field.value_state) for field in observation.form_fields),
         tuple(issue.code.value for issue in observation.issues),
     )
+
+
+def _target_url_for_tool(
+    observation: PageObservation | None,
+    request: ToolRequest,
+) -> str | None:
+    if request.name == "browser.navigate":
+        value = request.arguments.get("url")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    if observation is None or request.name != "browser.click":
+        return None
+
+    element_id = request.arguments.get("element_id")
+    if not isinstance(element_id, str) or not element_id:
+        return None
+    element = next(
+        (
+            candidate
+            for candidate in observation.interactive_elements
+            if candidate.element_id == element_id
+        ),
+        None,
+    )
+    if element is None or not element.target_url:
+        return None
+    return element.target_url.strip() or None
 
 
 def _has_useful_page_content(observation: PageObservation) -> bool:

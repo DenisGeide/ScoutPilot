@@ -58,6 +58,7 @@ class PlaywrightBrowserEngine:
         self._session: BrowserSessionInfo | None = None
         self._last_navigation_error: str | None = None
         self._recent_dialogs: list[BrowserDialogSnapshot] = []
+        self._dialog_handler_page_ids: set[int] = set()
 
     async def start(self) -> BrowserSessionInfo:
         """Start a persistent browser context and return public session metadata."""
@@ -90,13 +91,14 @@ class PlaywrightBrowserEngine:
             self._context.set_default_navigation_timeout(
                 self._settings.navigation_timeout_ms
             )
-            self._context.on("page", self._install_dialog_handler)
+            self._context.on("page", self._activate_new_page)
             self._page = (
-                self._context.pages[0]
+                self._context.pages[-1]
                 if self._context.pages
                 else await self._context.new_page()
             )
-            self._install_dialog_handler(self._page)
+            for page in self._context.pages:
+                self._install_dialog_handler(page)
             self._session = BrowserSessionInfo.create(self._settings)
             return self._session
         except Exception as exc:
@@ -114,6 +116,7 @@ class PlaywrightBrowserEngine:
         self._session = None
         self._last_navigation_error = None
         self._recent_dialogs = []
+        self._dialog_handler_page_ids = set()
 
         if context is not None:
             try:
@@ -311,7 +314,9 @@ class PlaywrightBrowserEngine:
                     error_code="semantic_element_not_found",
                 )
             handle, _snapshot = match
+            pages_before = tuple(self._context.pages) if self._context is not None else ()
             await handle.click(timeout=self._settings.default_timeout_ms)
+            await self._adopt_page_opened_by_action(pages_before)
             return await self._successful_action(
                 "click_by_semantic_id",
                 "Semantic element clicked.",
@@ -517,13 +522,16 @@ class PlaywrightBrowserEngine:
         return None
 
     def _get_page_or_none(self) -> Any | None:
-        if self._page is not None:
+        if self._page is not None and not self._page.is_closed():
             return self._page
         if self._context is None:
             return None
-        if self._context.pages:
-            self._page = self._context.pages[0]
+        open_pages = [page for page in self._context.pages if not page.is_closed()]
+        if open_pages:
+            self._page = open_pages[-1]
+            self._install_dialog_handler(self._page)
             return self._page
+        self._page = None
         return None
 
     async def _successful_action(self, action: str, message: str) -> BrowserActionResult:
@@ -577,10 +585,68 @@ class PlaywrightBrowserEngine:
         )
 
     def _install_dialog_handler(self, page: Any) -> None:
+        page_id = id(page)
+        if page_id in self._dialog_handler_page_ids:
+            return
+        self._dialog_handler_page_ids.add(page_id)
         page.on(
             "dialog",
             lambda dialog: asyncio.create_task(self._handle_unexpected_dialog(dialog)),
         )
+
+    def _activate_new_page(self, page: Any) -> None:
+        """Adopt a popup/new tab as the current controlled page."""
+
+        self._page = page
+        self._install_dialog_handler(page)
+
+    async def _adopt_page_opened_by_action(self, pages_before: tuple[Any, ...]) -> None:
+        """Wait briefly for a click-created tab and make it the active page."""
+
+        context = self._context
+        if context is None:
+            return
+
+        previous_page_ids = {id(page) for page in pages_before}
+        opened_page: Any | None = None
+        for _ in range(20):
+            candidates = [
+                page
+                for page in context.pages
+                if id(page) not in previous_page_ids and not page.is_closed()
+            ]
+            if candidates:
+                opened_page = candidates[-1]
+                break
+            await asyncio.sleep(0.05)
+
+        if opened_page is None:
+            return
+
+        self._activate_new_page(opened_page)
+        try:
+            await opened_page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=min(self._settings.navigation_timeout_ms, 10_000),
+            )
+        except (PlaywrightTimeoutError, PlaywrightError) as exc:
+            logger.info(
+                "new_page_load_wait_failed",
+                extra={
+                    "event": "new_page_load_wait_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+        try:
+            await opened_page.bring_to_front()
+        except PlaywrightError as exc:  # pragma: no cover - browser timing boundary
+            logger.info(
+                "new_page_focus_failed",
+                extra={
+                    "event": "new_page_focus_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     async def _handle_unexpected_dialog(self, dialog: Any) -> None:
         dialog_type = str(getattr(dialog, "type", "dialog") or "dialog")

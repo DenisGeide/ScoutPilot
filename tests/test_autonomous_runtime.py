@@ -190,6 +190,41 @@ def test_runtime_marks_unchanged_observation_before_second_reasoning_request():
     assert sum(event.name == "observation_captured" for event in events) == 2
 
 
+def test_runtime_blocks_reopening_the_same_observed_target_url():
+    target_url = "https://example.test/vacancies/first"
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("browser.click", {"element_id": "el_first"}),
+            _tool_call_result("browser.click", {"element_id": "el_first"}),
+            _text_result("Compared distinct vacancies."),
+        ]
+    )
+    planner = FakePlanningEngine(
+        ToolRequest(name="browser.click", arguments={"element_id": "el_first"})
+    )
+    tool_runtime = FakeToolRuntime(
+        [_tool_result("browser.click", success=True)]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=RepeatedLinkObservationEngine(target_url),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=planner,
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_click_schema()],
+        settings=RuntimeSettings(max_iterations=4, max_failures=2),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Compare different vacancies"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == "Compared distinct vacancies."
+    assert len(tool_runtime.requests) == 1
+    blocked = next(event for event in events if event.name == "repeated_target_blocked")
+    assert blocked.details["target_url"] == target_url
+
+
 def test_runtime_replans_when_semantic_element_disappears():
     provider = MockLlmProvider(
         [
@@ -591,6 +626,23 @@ def _tool_schema() -> ToolSchema:
     )
 
 
+def _browser_click_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.click",
+        description="Click a semantic link.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema(
+                    "element_id",
+                    ToolValueType.STRING,
+                    "Semantic element identifier.",
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
 def _tool_call_result(name, arguments):
     return LlmProviderResult(
         success=True,
@@ -650,6 +702,35 @@ class StaticObservationEngine:
             url="https://example.test/same",
             title="Same",
             summary="Same semantic state.",
+        )
+
+
+class RepeatedLinkObservationEngine:
+    def __init__(self, target_url: str):
+        self.target_url = target_url
+        self.count = 0
+
+    async def observe(self):
+        self.count += 1
+        if self.count == 2:
+            return PageObservation(
+                url=self.target_url,
+                title="First vacancy detail",
+                summary="First vacancy requirements.",
+            )
+        return PageObservation(
+            url="https://example.test/search",
+            title="Vacancy search",
+            summary="Search results.",
+            interactive_elements=[
+                InteractiveElement(
+                    element_id="el_first",
+                    role="link",
+                    accessible_name="First vacancy",
+                    visible_text="First vacancy",
+                    target_url=self.target_url,
+                )
+            ],
         )
 
 

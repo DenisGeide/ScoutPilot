@@ -1054,6 +1054,8 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
             return "нужно подтверждение перед внешним действием."
         message = str(details.get("message") or "").strip()
         return f"действие не удалось: {message}" if message else "действие не удалось."
+    if name == "repeated_target_blocked":
+        return "эту страницу уже открывал; выбираю другую вакансию."
     if name == "confirmation_required":
         return "останавливаюсь перед действием, которое требует подтверждения."
     return ""

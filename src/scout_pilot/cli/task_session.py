@@ -575,6 +575,8 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
         return f"Выбран инструмент {tool}."
     if event.name == "tool_execution_finished":
         return _tool_result_message(event)
+    if event.name == "repeated_target_blocked":
+        return "Повторное открытие той же страницы пропущено. Агент выберет другой результат."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
     if event.name == "confirmation_required":
@@ -595,6 +597,9 @@ def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
         return f"Инструмент перед выполнением: {tool}; аргументы: {_safe_json(arguments or {})}"
     if event.name == "tool_execution_finished":
         return _tool_result_message(event)
+    if event.name == "repeated_target_blocked":
+        target = event.details.get("target_url") or "уже посещенная страница"
+        return f"Повторный переход пропущен: {target}. Следующее действие: выбрать другую ссылку."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
     if event.name == "confirmation_required":

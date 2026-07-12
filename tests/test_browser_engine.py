@@ -217,6 +217,76 @@ def test_browser_clicks_and_fills_by_semantic_ids(tmp_path):
     asyncio.run(scenario())
 
 
+def test_browser_adopts_each_new_tab_opened_by_semantic_link(tmp_path):
+    index_path = tmp_path / "index.html"
+    first_path = tmp_path / "first.html"
+    second_path = tmp_path / "second.html"
+    first_path.write_text(
+        "<!doctype html><title>First vacancy</title><main><h1>First vacancy</h1></main>",
+        encoding="utf-8",
+    )
+    second_path.write_text(
+        "<!doctype html><title>Second vacancy</title><main><h1>Second vacancy</h1></main>",
+        encoding="utf-8",
+    )
+    index_path.write_text(
+        f"""
+        <!doctype html>
+        <title>Vacancies</title>
+        <main>
+          <a href="{first_path.resolve().as_uri()}" target="_blank">First vacancy</a>
+          <a href="{second_path.resolve().as_uri()}" target="_blank">Second vacancy</a>
+        </main>
+        """,
+        encoding="utf-8",
+    )
+    browser = PlaywrightBrowserEngine(
+        BrowserEngineConfig(
+            user_data_dir=tmp_path / "profile",
+            headless=True,
+            default_timeout_ms=10000,
+            navigation_timeout_ms=10000,
+            screenshots_dir=tmp_path / "screenshots",
+        )
+    )
+    observer = SemanticObservationEngine(browser)
+
+    async def scenario():
+        await browser.start()
+        try:
+            await browser.navigate_to(index_path.resolve().as_uri())
+            observation = await observer.observe()
+            first = next(
+                item
+                for item in observation.interactive_elements
+                if item.accessible_name == "First vacancy"
+            )
+            first_result = await browser.click_by_semantic_id(first.element_id)
+            first_state = await browser.current_state()
+
+            await browser.navigate_to(index_path.resolve().as_uri())
+            observation = await observer.observe()
+            second = next(
+                item
+                for item in observation.interactive_elements
+                if item.accessible_name == "Second vacancy"
+            )
+            second_result = await browser.click_by_semantic_id(second.element_id)
+            second_state = await browser.current_state()
+            return first_result, first_state, second_result, second_state
+        finally:
+            await browser.stop()
+
+    first_result, first_state, second_result, second_state = asyncio.run(scenario())
+
+    assert first_result.success is True
+    assert first_result.url == first_path.resolve().as_uri()
+    assert first_state.title == "First vacancy"
+    assert second_result.success is True
+    assert second_result.url == second_path.resolve().as_uri()
+    assert second_state.title == "Second vacancy"
+
+
 class BrokenContext:
     async def close(self):
         raise RuntimeError("context close failed")
