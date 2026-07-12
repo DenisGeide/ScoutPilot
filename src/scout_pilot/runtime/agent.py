@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from typing import Protocol
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from scout_pilot.intelligence.evaluator import (
@@ -139,6 +141,7 @@ class AutonomousAgentRuntime:
         observation: PageObservation | None = None
         previous_observation_signature: tuple[object, ...] | None = None
         visited_target_urls: set[str] = set()
+        repeated_target_count = 0
         plan: ExecutionPlan | None = None
         failure_count = 0
         self._state = AgentState.IDLE
@@ -338,7 +341,16 @@ class AutonomousAgentRuntime:
                     task_id,
                     progress,
                 )
-                reasoning = await self._reason(task, task_id, observation)
+                reasoning_observation = _observation_with_visited_targets_last(
+                    observation,
+                    visited_target_urls,
+                )
+                reasoning = await self._reason(
+                    task,
+                    task_id,
+                    reasoning_observation,
+                    visited_target_urls,
+                )
                 budget_event = self._context_budget_event(
                     "reasoning",
                     self._reasoning_engine,
@@ -450,6 +462,37 @@ class AutonomousAgentRuntime:
                 selected_tool = reasoning.selected_tool
                 selected_plan_step = _find_plan_step(plan, selected_tool)
                 selected_target_url = _target_url_for_tool(observation, selected_tool)
+                if selected_target_url and _target_was_visited(
+                    selected_target_url,
+                    visited_target_urls,
+                ):
+                    alternative_tool = _alternative_unvisited_target_tool(
+                        observation,
+                        selected_tool,
+                        selected_target_url,
+                        visited_target_urls,
+                    )
+                    if alternative_tool is not None:
+                        alternative_target_url = _target_url_for_tool(
+                            observation,
+                            alternative_tool,
+                        )
+                        yield self._event(
+                            "repeated_target_remapped",
+                            RuntimeStatus.RUNNING,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.tool.repeated_target_remapped",
+                            details={
+                                "original_target_url": selected_target_url,
+                                "target_url": alternative_target_url,
+                                "tool_name": alternative_tool.name,
+                                "next_action": "open_unvisited_equivalent_target",
+                            },
+                        )
+                        selected_tool = alternative_tool
+                        selected_target_url = alternative_target_url
+                        selected_plan_step = _find_plan_step(plan, selected_tool)
                 yield self._event(
                     "tool_selected",
                     RuntimeStatus.RUNNING,
@@ -466,9 +509,11 @@ class AutonomousAgentRuntime:
                         "next_action": "execute_tool",
                     },
                 )
-                if selected_target_url and selected_target_url in visited_target_urls:
-                    failure_count += 1
-                    progress = _progress(iteration, self._settings, failure_count, plan)
+                if selected_target_url and _target_was_visited(
+                    selected_target_url,
+                    visited_target_urls,
+                ):
+                    repeated_target_count += 1
                     message = (
                         "Repeated navigation to an already visited target URL was blocked. "
                         "Choose a different unvisited semantic result or answer from memory."
@@ -490,7 +535,7 @@ class AutonomousAgentRuntime:
                             "next_action": "choose_unvisited_target_or_answer",
                         },
                     )
-                    if failure_count >= self._settings.max_failures:
+                    if repeated_target_count >= self._settings.max_repeated_targets:
                         result = await self._fail(
                             task_id,
                             task,
@@ -520,6 +565,7 @@ class AutonomousAgentRuntime:
                 tool_result = await self._tool_runtime.execute(selected_tool)
                 if tool_result.success and selected_target_url:
                     visited_target_urls.add(selected_target_url)
+                    repeated_target_count = 0
                 await self._remember_tool_result(task_id, tool_result)
                 progress = _progress(iteration, self._settings, failure_count, plan)
                 yield self._event(
@@ -834,6 +880,7 @@ class AutonomousAgentRuntime:
         task: UserTask,
         task_id: str,
         observation: PageObservation | None,
+        visited_target_urls: set[str],
     ):
         return await self._reasoning_engine.reason(
             ReasoningContext(
@@ -843,6 +890,7 @@ class AutonomousAgentRuntime:
                 available_tools=self._tool_schemas,
                 security_constraints=self._security_constraints,
                 confirmation_constraints=self._confirmation_constraints,
+                visited_target_urls=tuple(sorted(visited_target_urls))[-20:],
                 budget=self._budget,
             )
         )
@@ -1549,6 +1597,110 @@ def _target_url_for_tool(
     if element is None or not element.target_url:
         return None
     return element.target_url.strip() or None
+
+
+def _observation_with_visited_targets_last(
+    observation: PageObservation,
+    visited_target_urls: set[str],
+) -> PageObservation:
+    if not visited_target_urls:
+        return observation
+
+    unvisited = []
+    visited = []
+    for element in observation.interactive_elements:
+        target_url = (element.target_url or "").strip()
+        if not target_url or not _target_was_visited(target_url, visited_target_urls):
+            unvisited.append(element)
+            continue
+        name = element.accessible_name or element.visible_text or "visited link"
+        visited.append(
+            replace(
+                element,
+                accessible_name=f"[already visited] {name}",
+            )
+        )
+    if not visited:
+        return observation
+    return PageObservation(
+        url=observation.url,
+        title=observation.title,
+        summary=observation.summary,
+        elements=observation.elements,
+        metadata=observation.metadata,
+        sections=observation.sections,
+        interactive_elements=(*unvisited, *visited),
+        form_fields=observation.form_fields,
+        focused_element=observation.focused_element,
+        dialogs=observation.dialogs,
+        issues=observation.issues,
+        limits={**observation.limits, "visited_targets_marked": len(visited)},
+    )
+
+
+def _alternative_unvisited_target_tool(
+    observation: PageObservation,
+    request: ToolRequest,
+    selected_target_url: str,
+    visited_target_urls: set[str],
+) -> ToolRequest | None:
+    selected_shape = _url_resource_shape(selected_target_url)
+    if selected_shape is None:
+        return None
+    candidate = next(
+        (
+            element
+            for element in observation.interactive_elements
+            if element.role == "link"
+            and element.target_url
+            and not _target_was_visited(element.target_url, visited_target_urls)
+            and _url_resource_shape(element.target_url) == selected_shape
+        ),
+        None,
+    )
+    if candidate is None or candidate.target_url is None:
+        return None
+    if request.name == "browser.click":
+        return ToolRequest(
+            name="browser.click",
+            arguments={"element_id": candidate.element_id},
+        )
+    if request.name == "browser.navigate":
+        return ToolRequest(
+            name="browser.navigate",
+            arguments={"url": candidate.target_url},
+        )
+    return None
+
+
+def _url_resource_shape(url: str) -> tuple[str, str, str] | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    path = parsed.path.rstrip("/") or "/"
+    shaped_path = re.sub(
+        r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        "{id}",
+        path,
+    )
+    shaped_path = re.sub(r"\d{3,}", "{id}", shaped_path)
+    if shaped_path == path:
+        return None
+    return parsed.scheme.casefold(), parsed.netloc.casefold(), shaped_path.casefold()
+
+
+def _target_was_visited(url: str, visited_target_urls: set[str]) -> bool:
+    identity = _target_identity(url)
+    return any(_target_identity(visited_url) == identity for visited_url in visited_target_urls)
+
+
+def _target_identity(url: str) -> tuple[str, str, str]:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme.casefold(),
+        parsed.netloc.casefold(),
+        (parsed.path.rstrip("/") or "/").casefold(),
+    )
 
 
 def _has_useful_page_content(observation: PageObservation) -> bool:

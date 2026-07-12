@@ -582,6 +582,8 @@ def _compact_progress_message(event: RuntimeEvent) -> str:
         return _tool_result_message(event)
     if event.name == "repeated_target_blocked":
         return "Повторное открытие той же страницы пропущено. Агент выберет другой результат."
+    if event.name == "repeated_target_remapped":
+        return "Посещенная ссылка заменена другим непосещенным результатом того же типа."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
     if event.name == "modal_dismiss_started":
@@ -611,6 +613,9 @@ def _event_detail_message(event: RuntimeEvent, *, verbose: bool) -> str:
     if event.name == "repeated_target_blocked":
         target = event.details.get("target_url") or "уже посещенная страница"
         return f"Повторный переход пропущен: {target}. Следующее действие: выбрать другую ссылку."
+    if event.name == "repeated_target_remapped":
+        target = event.details.get("target_url") or "другой непосещенный результат"
+        return f"Вместо повторного перехода выбран новый результат: {target}."
     if event.name == "page_blocker_detected":
         return _page_blocker_message(event)
     if event.name == "modal_dismiss_finished":

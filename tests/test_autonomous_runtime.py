@@ -254,6 +254,57 @@ def test_runtime_blocks_reopening_the_same_observed_target_url():
     assert blocked.details["target_url"] == target_url
 
 
+def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():
+    first_url = "https://example.test/items/1001?source=results"
+    second_url = "https://example.test/items/1002?source=results"
+    provider = MockLlmProvider(
+        [
+            _tool_call_result("browser.navigate", {"url": first_url}),
+            _tool_call_result("browser.navigate", {"url": first_url}),
+            _text_result("Compared two different items."),
+        ]
+    )
+    planner = FakePlanningEngine(
+        ToolRequest(name="browser.navigate", arguments={"url": first_url})
+    )
+    tool_runtime = FakeToolRuntime(
+        [
+            _tool_result("browser.navigate", success=True),
+            _tool_result("browser.navigate", success=True),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=MultipleResourceObservationEngine(first_url, second_url),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=planner,
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_navigate_schema()],
+        settings=RuntimeSettings(max_iterations=4, max_failures=1),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Compare different result pages"))))
+    second_reasoning_payload = json.loads(provider.requests[1].messages[1].content)
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        ToolRequest(name="browser.navigate", arguments={"url": first_url}),
+        ToolRequest(name="browser.navigate", arguments={"url": second_url}),
+    ]
+    remapped = next(event for event in events if event.name == "repeated_target_remapped")
+    assert remapped.details["original_target_url"] == first_url
+    assert remapped.details["target_url"] == second_url
+    assert second_reasoning_payload["visited_target_urls"] == [first_url]
+    interactive = second_reasoning_payload["observation"]["interactive_elements"]
+    assert interactive[0]["target_url"] == second_url
+    assert any(
+        item.get("accessible_name", "").startswith("[already visited]")
+        for item in interactive
+        if item.get("target_url") == first_url
+    )
+
+
 def test_runtime_replans_when_semantic_element_disappears():
     provider = MockLlmProvider(
         [
@@ -672,6 +723,23 @@ def _browser_click_schema() -> ToolSchema:
     )
 
 
+def _browser_navigate_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.navigate",
+        description="Navigate to an observed URL.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema(
+                    "url",
+                    ToolValueType.STRING,
+                    "Observed URL.",
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
 def _tool_call_result(name, arguments):
     return LlmProviderResult(
         success=True,
@@ -793,6 +861,44 @@ class DismissibleModalObservationEngine:
                     severity="warning",
                 )
             ],
+        )
+
+
+class MultipleResourceObservationEngine:
+    def __init__(self, first_url: str, second_url: str):
+        self.first_url = first_url
+        self.second_url = second_url
+        self.count = 0
+
+    async def observe(self):
+        self.count += 1
+        if self.count in {1, 3}:
+            return PageObservation(
+                url="https://example.test/results",
+                title="Results",
+                summary="Two result links are visible.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id="el_first",
+                        role="link",
+                        accessible_name="First item",
+                        visible_text="First item",
+                        target_url=self.first_url,
+                    ),
+                    InteractiveElement(
+                        element_id="el_second",
+                        role="link",
+                        accessible_name="Second item",
+                        visible_text="Second item",
+                        target_url=self.second_url,
+                    ),
+                ],
+            )
+        current_url = self.first_url if self.count == 2 else self.second_url
+        return PageObservation(
+            url=current_url,
+            title="Item details",
+            summary="Distinct item details are visible.",
         )
 
 

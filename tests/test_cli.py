@@ -29,7 +29,7 @@ def test_menu_command_parses_launcher_defaults():
     assert args.command == "menu"
     assert args.provider == "codex"
     assert args.dashboard == "off"
-    assert args.max_iterations == 24
+    assert args.max_iterations == 40
     assert args.headless is False
 
 

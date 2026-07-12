@@ -1071,6 +1071,8 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
         return f"действие не удалось: {message}" if message else "действие не удалось."
     if name == "repeated_target_blocked":
         return "эту страницу уже открывал; выбираю другую вакансию."
+    if name == "repeated_target_remapped":
+        return "эта ссылка уже прочитана; автоматически выбираю другой похожий результат."
     if name == "confirmation_required":
         return "останавливаюсь перед действием, которое требует подтверждения."
     return ""

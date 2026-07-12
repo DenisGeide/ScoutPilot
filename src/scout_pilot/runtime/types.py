@@ -9,7 +9,7 @@ from typing import Mapping
 from scout_pilot.models import ExecutionPlan, RuntimeStatus, UserTask
 
 
-DEFAULT_MAX_AGENT_STEPS = 24
+DEFAULT_MAX_AGENT_STEPS = 40
 
 
 class AgentState(str, Enum):
@@ -47,7 +47,8 @@ class RuntimeSettings:
     """Runtime loop limits."""
 
     max_iterations: int = DEFAULT_MAX_AGENT_STEPS
-    max_failures: int = 3
+    max_failures: int = 5
+    max_repeated_targets: int = 6
     max_memory_summaries: int = 10
 
 

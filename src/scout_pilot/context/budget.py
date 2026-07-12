@@ -656,6 +656,8 @@ def _interactive_element_priority(element: InteractiveElement) -> int:
     target_url = element.target_url or ""
     input_type = (element.input_type or "").casefold()
     score = -100 if element.state.disabled else 0
+    if name.casefold().startswith("[already visited]"):
+        score -= 120
     if role == "link" and target_url:
         score += 45 + min(target_url.count("/"), 8)
     elif role in {"button", "menuitem", "tab"}:

@@ -77,7 +77,8 @@ Autonomous Agent Runtime выполняет задачу как ограниче
 Защиты runtime:
 
 - `max_iterations` останавливает бесконечные циклы наблюдений и рассуждений. В CLI этот внутренний счетчик называется «шаг агента»: одна пользовательская задача может включать много таких шагов.
-- `max_failures` ограничивает повторные ошибки provider/tool/recovery.
+- `max_failures` ограничивает повторные ошибки provider/tool/recovery; повтор уже посещенной ссылки учитывается отдельным счетчиком и не завершает задачу как обычная tool failure.
+- Посещенные URL явно попадают в provider-neutral reasoning context. Runtime понижает такие элементы в контекстном приоритете и может заменить повторный переход другим непосещенным link с тем же общим ресурсным URL-шаблоном.
 - `cancel()` завершает задачу через `cancelled` без дополнительных browser actions.
 - Retryable tool failures переводят runtime в `retrying` и могут вызвать `PlanningEngine.revise_plan`.
 - Повторные no-op observations и повторяющиеся tool failures превращаются в reflection events и bounded memory summaries, чтобы runtime мог перестроить план без website-specific логики.

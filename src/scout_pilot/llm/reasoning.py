@@ -81,6 +81,7 @@ class ReasoningEngine:
             available_tools=context.available_tools,
             security_constraints=context.security_constraints,
             confirmation_constraints=context.confirmation_constraints,
+            visited_target_urls=context.visited_target_urls,
             budget=budgeted.budget,
         )
         request = LlmProviderRequest(
@@ -170,6 +171,7 @@ def _build_messages(
         "memory_summaries": list(context.memory_summaries),
         "security_constraints": list(context.security_constraints),
         "confirmation_constraints": list(context.confirmation_constraints),
+        "visited_target_urls": list(context.visited_target_urls),
         "budget": dict(context.budget),
         "context_metrics": dict(metrics.to_dict()) if metrics else None,
         "available_tool_names": [tool.name for tool in context.available_tools],
@@ -188,7 +190,9 @@ def _build_messages(
                 "is truncated when relevant visible sections or interactive elements are already "
                 "available. Never repeat observation or wait on an unchanged page; answer from "
                 "the available evidence or choose a different semantic tool. Track visited URLs "
-                "from memory. For multi-page comparisons, use distinct target_url values from "
+                "from the explicit visited_target_urls list. Never request a URL in that list "
+                "again unless the user explicitly asks to reopen it. For multi-page comparisons, "
+                "use distinct target_url values from "
                 "the observation and never open the same target URL twice unless the user asks. "
                 "After reading a detail page, navigate to the remembered results-page URL and "
                 "choose a different unvisited target. "
