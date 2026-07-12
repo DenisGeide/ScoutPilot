@@ -1,3 +1,4 @@
+import asyncio
 import json
 import importlib
 from pathlib import Path
@@ -5,8 +6,12 @@ from types import SimpleNamespace
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
+from scout_pilot.cli.main import _extract_terminal_links
 from scout_pilot.cli.main import _format_terminal_links
 from scout_pilot.cli.main import _normalize_menu_start_url
+from scout_pilot.cli.main import _open_menu_link
+from scout_pilot.cli.main import _parse_open_link_command
+from scout_pilot.models import ToolRequest
 
 
 def test_status_command_prints_russian_placeholder(capsys):
@@ -110,7 +115,8 @@ def test_terminal_links_are_short_clickable_and_blue_when_enabled():
         "\x1b]8;;https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search"
         in rendered
     )
-    assert "Ctrl + клик мыши - открыть" in rendered
+    assert "[1]" in rendered
+    assert "Ctrl + клик или /open 1" in rendered
     assert rendered.endswith(".")
 
 
@@ -121,10 +127,60 @@ def test_terminal_links_keep_plain_output_readable_without_color():
     )
 
     assert rendered == (
-        "Ссылка: https://example.test/jobs/ai-engineer  "
-        "[Ctrl + клик мыши - открыть]"
+        "Ссылка: [1] https://example.test/jobs/ai-engineer  "
+        "[Ctrl + клик или /open 1]"
     )
     assert "\x1b[" not in rendered
+
+
+def test_terminal_links_keep_exact_targets_and_stable_numbers():
+    first = "https://example.test/items/1001?source=search"
+    second = "https://example.test/items/1002?source=search"
+    message = f"Первый: {first}. Повтор: {first}. Второй: {second}."
+
+    rendered = _format_terminal_links(message, use_color=False)
+
+    assert _extract_terminal_links(message) == (first, second)
+    assert rendered.count("[1] https://example.test/items/1001") == 2
+    assert rendered.count("[2] https://example.test/items/1002") == 1
+
+
+def test_open_link_command_validates_available_number():
+    assert _parse_open_link_command("/open 2", 3) == (2, None)
+    assert "например /open 1" in str(_parse_open_link_command("/open", 3)[1])
+    assert "пока нет ссылок" in str(_parse_open_link_command("/open 1", 0)[1])
+    assert "Доступны номера" in str(_parse_open_link_command("/open 4", 3)[1])
+
+
+def test_open_menu_link_uses_exact_url_through_tool_runtime():
+    target_url = "https://example.test/items/1001?source=search"
+
+    class FakeRuntime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            return SimpleNamespace(success=True, message="Navigation completed.")
+
+    class FakeBrowser:
+        async def current_state(self):
+            return SimpleNamespace(title="AI Engineer vacancy")
+
+    runtime = FakeRuntime()
+    message = asyncio.run(
+        _open_menu_link(
+            link_index=1,
+            target_url=target_url,
+            tool_runtime=runtime,
+            browser=FakeBrowser(),
+        )
+    )
+
+    assert runtime.requests == [
+        ToolRequest("browser.navigate", {"url": target_url})
+    ]
+    assert message == "Открыл ссылку 1: AI Engineer vacancy"
 
 
 def test_demo_vacancy_search_command_requires_start_url():

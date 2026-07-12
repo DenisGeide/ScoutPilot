@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -675,7 +676,10 @@ async def _menu_run_agent(args: argparse.Namespace) -> int:
     print("")
     print("Чат с агентом: браузер остается открытым, пока вы не выйдете из режима.")
     print("Сначала откроем сайт. Потом пишите задачи обычным текстом.")
-    print("Команды: /url - сменить сайт, /report - последний отчет, /debug - подробный режим, /exit - выйти.")
+    print(
+        "Команды: /url - сменить сайт, /open N - открыть ссылку из ответа, "
+        "/report - последний отчет, /debug - подробный режим, /exit - выйти."
+    )
     start_url = _menu_prompt_start_url()
     provider = _menu_fast_provider(args, start_url)
     print(f"Провайдер: {provider}. Лимит шагов агента на задачу: {args.max_iterations}.")
@@ -690,7 +694,7 @@ def _menu_task_help() -> None:
     print("Пример: есть ли на странице поле поиска?")
     print("Пример: найди AI Engineer вакансии с зарплатой выше 1500 долларов.")
     print("Пример: открой отклики и приглашения и кратко скажи, что там есть.")
-    print("Команды: /url, /report, /debug, /exit.")
+    print("Команды: /url, /open N, /report, /debug, /exit.")
 
 
 def _menu_prompt_start_url() -> str:
@@ -786,6 +790,7 @@ async def _menu_chat_session(
     debug_output = args.dashboard == "verbose"
     last_report: Path | None = None
     last_replay: Path | None = None
+    last_links: tuple[str, ...] = ()
 
     try:
         print("Открываю браузер...")
@@ -823,6 +828,21 @@ async def _menu_chat_session(
                         argparse.Namespace(path=str(last_replay or last_report))
                     )
                 continue
+            if normalized == "/open" or normalized.startswith("/open "):
+                link_index, error = _parse_open_link_command(task_text, len(last_links))
+                if error is not None:
+                    print(error)
+                    continue
+                target_url = last_links[link_index - 1]
+                print(
+                    await _open_menu_link(
+                        link_index=link_index,
+                        target_url=target_url,
+                        tool_runtime=tool_runtime,
+                        browser=browser,
+                    )
+                )
+                continue
             if normalized == "/url":
                 start_url = _menu_prompt_start_url()
                 navigation = await tool_runtime.execute(
@@ -849,6 +869,7 @@ async def _menu_chat_session(
             )
             last_report = result["report_path"]
             last_replay = result["replay_path"]
+            last_links = tuple(result.get("links", ()))
             if result["success"]:
                 print("Можно написать следующую задачу.")
             else:
@@ -976,6 +997,7 @@ async def _menu_chat_run_task(
                 "success": False,
                 "report_path": artifacts.report_path,
                 "replay_path": artifacts.replay_path,
+                "links": (),
             }
 
         if runtime.last_result is None:
@@ -1002,6 +1024,7 @@ async def _menu_chat_run_task(
             "success": success,
             "report_path": artifacts.report_path,
             "replay_path": artifacts.replay_path,
+            "links": _extract_terminal_links(final_message),
         }
     except Exception as exc:
         final_message = (
@@ -1019,6 +1042,7 @@ async def _menu_chat_run_task(
             "success": False,
             "report_path": artifacts.report_path,
             "replay_path": artifacts.replay_path,
+            "links": (),
         }
 
 
@@ -1028,7 +1052,9 @@ def _print_agent_final_message(message: str) -> None:
 
 def _format_terminal_links(message: str, *, use_color: bool | None = None) -> str:
     """Keep exact links in artifacts while presenting concise terminal links."""
-    color_enabled = sys.stdout.isatty() if use_color is None else use_color
+    color_enabled = _supports_terminal_hyperlinks() if use_color is None else use_color
+    links = _extract_terminal_links(message)
+    link_numbers = {url: index for index, url in enumerate(links, start=1)}
 
     def replace_url(match: re.Match[str]) -> str:
         raw_url = match.group(0)
@@ -1036,6 +1062,7 @@ def _format_terminal_links(message: str, *, use_color: bool | None = None) -> st
         while raw_url and raw_url[-1] in ".,;:!?)]}":
             trailing = raw_url[-1] + trailing
             raw_url = raw_url[:-1]
+        link_number = link_numbers[raw_url]
 
         parsed = urlparse(raw_url)
         display_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}"
@@ -1049,9 +1076,59 @@ def _format_terminal_links(message: str, *, use_color: bool | None = None) -> st
             rendered = (
                 f"{link_start}{_ANSI_BLUE}{display_url}{_ANSI_RESET}{_OSC_LINK_END}"
             )
-        return f"{rendered}  [Ctrl + клик мыши - открыть]{trailing}"
+        return (
+            f"[{link_number}] {rendered}  "
+            f"[Ctrl + клик или /open {link_number}]{trailing}"
+        )
 
     return _TERMINAL_URL_RE.sub(replace_url, message)
+
+
+def _extract_terminal_links(message: str) -> tuple[str, ...]:
+    links: list[str] = []
+    for match in _TERMINAL_URL_RE.finditer(message):
+        url = match.group(0).rstrip(".,;:!?)]}")
+        if url and url not in links:
+            links.append(url)
+    return tuple(links)
+
+
+def _supports_terminal_hyperlinks() -> bool:
+    if not sys.stdout.isatty():
+        return False
+    if sys.platform != "win32":
+        return True
+    return bool(os.environ.get("WT_SESSION"))
+
+
+def _parse_open_link_command(command: str, link_count: int) -> tuple[int, str | None]:
+    parts = command.strip().split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        return 0, "Введите номер ссылки, например /open 1."
+    index = int(parts[1])
+    if link_count == 0:
+        return 0, "В последнем ответе пока нет ссылок."
+    if index < 1 or index > link_count:
+        return 0, f"Ссылки с номером {index} нет. Доступны номера от 1 до {link_count}."
+    return index, None
+
+
+async def _open_menu_link(
+    *,
+    link_index: int,
+    target_url: str,
+    tool_runtime: object,
+    browser: object,
+) -> str:
+    from scout_pilot.models import ToolRequest
+
+    navigation = await tool_runtime.execute(
+        ToolRequest("browser.navigate", {"url": target_url})
+    )
+    if not navigation.success:
+        return f"Не удалось открыть ссылку {link_index}: {navigation.message}"
+    state = await browser.current_state()
+    return f"Открыл ссылку {link_index}: {state.title or target_url}"
 
 
 def _menu_record_chat_event(
