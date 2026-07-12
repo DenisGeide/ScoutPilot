@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
+from scout_pilot.cli.main import _format_terminal_links
 from scout_pilot.cli.main import _normalize_menu_start_url
 
 
@@ -95,6 +96,35 @@ def test_menu_url_normalization_rejects_prompt_text():
 
     assert normalized is None
     assert "настоящий URL" in str(error)
+
+
+def test_terminal_links_are_short_clickable_and_blue_when_enabled():
+    message = (
+        "Вакансия: https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search."
+    )
+
+    rendered = _format_terminal_links(message, use_color=True)
+
+    assert "\x1b[94mhttps://hh.ru/vacancy/134165467\x1b[0m" in rendered
+    assert (
+        "\x1b]8;;https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search"
+        in rendered
+    )
+    assert "Ctrl + клик мыши - открыть" in rendered
+    assert rendered.endswith(".")
+
+
+def test_terminal_links_keep_plain_output_readable_without_color():
+    rendered = _format_terminal_links(
+        "Ссылка: https://example.test/jobs/ai-engineer?tracking=private",
+        use_color=False,
+    )
+
+    assert rendered == (
+        "Ссылка: https://example.test/jobs/ai-engineer  "
+        "[Ctrl + клик мыши - открыть]"
+    )
+    assert "\x1b[" not in rendered
 
 
 def test_demo_vacancy_search_command_requires_start_url():

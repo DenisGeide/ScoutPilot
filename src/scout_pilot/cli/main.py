@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import replace
@@ -14,6 +15,12 @@ from urllib.parse import urlparse
 
 from scout_pilot.config import AppConfig
 from scout_pilot.runtime.types import DEFAULT_MAX_AGENT_STEPS
+
+
+_TERMINAL_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+_ANSI_BLUE = "\x1b[94m"
+_ANSI_RESET = "\x1b[0m"
+_OSC_LINK_END = "\x1b]8;;\x1b\\"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -989,7 +996,7 @@ async def _menu_chat_run_task(
             replay_path=paths.replay_path,
         )
         print("")
-        print(f"Агент: {final_message}")
+        _print_agent_final_message(final_message)
         print(f"Отчет: {artifacts.report_path}")
         return {
             "success": success,
@@ -1013,6 +1020,38 @@ async def _menu_chat_run_task(
             "report_path": artifacts.report_path,
             "replay_path": artifacts.replay_path,
         }
+
+
+def _print_agent_final_message(message: str) -> None:
+    print(f"Агент: {_format_terminal_links(message)}")
+
+
+def _format_terminal_links(message: str, *, use_color: bool | None = None) -> str:
+    """Keep exact links in artifacts while presenting concise terminal links."""
+    color_enabled = sys.stdout.isatty() if use_color is None else use_color
+
+    def replace_url(match: re.Match[str]) -> str:
+        raw_url = match.group(0)
+        trailing = ""
+        while raw_url and raw_url[-1] in ".,;:!?)]}":
+            trailing = raw_url[-1] + trailing
+            raw_url = raw_url[:-1]
+
+        parsed = urlparse(raw_url)
+        display_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}"
+        if len(display_url) > 64:
+            path_tail = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+            display_url = f"{parsed.scheme}://{parsed.netloc}/.../{path_tail}"
+
+        rendered = display_url
+        if color_enabled:
+            link_start = f"\x1b]8;;{raw_url}\x1b\\"
+            rendered = (
+                f"{link_start}{_ANSI_BLUE}{display_url}{_ANSI_RESET}{_OSC_LINK_END}"
+            )
+        return f"{rendered}  [Ctrl + клик мыши - открыть]{trailing}"
+
+    return _TERMINAL_URL_RE.sub(replace_url, message)
 
 
 def _menu_record_chat_event(
