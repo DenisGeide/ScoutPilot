@@ -117,6 +117,43 @@ def test_oversized_page_is_bounded_and_reports_truncation(tmp_path):
     assert PageIssueCode.OBSERVATION_TRUNCATED in {issue.code for issue in observation.issues}
 
 
+def test_oversized_page_keeps_main_results_before_header_navigation(tmp_path):
+    navigation = "".join(
+        f'<a href="https://example.test/nav/{index}">Menu item {index}</a>'
+        for index in range(30)
+    )
+    results = "".join(
+        f'<a href="https://example.test/details/{index}">AI Engineer result {index} with salary</a>'
+        for index in range(3)
+    )
+    html = (
+        "<!doctype html><title>Prioritized results</title>"
+        f"<header><nav>{navigation}</nav></header>"
+        f"<main><h1>Search results</h1>{results}</main>"
+    )
+
+    observation = _observe_html(
+        tmp_path,
+        html,
+        settings=ObservationSettings(
+            max_sections=3,
+            max_interactive_elements=5,
+            max_form_fields=2,
+            max_dialogs=1,
+            max_section_chars=300,
+            max_total_chars=3500,
+        ),
+    )
+
+    names = [
+        element.accessible_name or element.visible_text or ""
+        for element in observation.interactive_elements
+    ]
+    assert observation.sections[0].role == "main"
+    assert any("AI Engineer result" in name for name in names)
+    assert len(str(observation.to_llm_context())) <= 3500
+
+
 def test_repeated_navigation_and_footer_content_is_deduplicated(tmp_path):
     html = """
     <!doctype html>

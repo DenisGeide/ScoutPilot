@@ -77,11 +77,11 @@ class ObservationSettings:
     """Limits applied before observations are sent to an LLM."""
 
     max_sections: int = 12
-    max_interactive_elements: int = 40
+    max_interactive_elements: int = 60
     max_form_fields: int = 25
     max_dialogs: int = 5
     max_section_chars: int = 700
-    max_total_chars: int = 6000
+    max_total_chars: int = 12000
 
     @classmethod
     def from_app_config(cls, config: AppConfig) -> "ObservationSettings":
@@ -175,7 +175,11 @@ class SemanticObservationEngine:
         seen: set[str] = set()
         truncated = len(snapshots) > self._settings.max_sections
 
-        for snapshot in snapshots:
+        prioritized = sorted(
+            enumerate(snapshots),
+            key=lambda item: (-_browser_section_priority(item[1]), item[0]),
+        )
+        for _, snapshot in prioritized:
             text = _truncate(snapshot.text, self._settings.max_section_chars)
             key = _dedupe_key(snapshot.role, snapshot.heading, text)
             if not text or key in seen:
@@ -204,7 +208,11 @@ class SemanticObservationEngine:
         seen: set[str] = set()
         truncated = len(snapshots) > self._settings.max_interactive_elements
 
-        for snapshot in snapshots:
+        prioritized = sorted(
+            enumerate(snapshots),
+            key=lambda item: (-_browser_interactive_priority(item[1]), item[0]),
+        )
+        for _, snapshot in prioritized:
             name = _truncate_optional(snapshot.accessible_name, 160)
             text = _truncate_optional(snapshot.visible_text, 160)
             key = _dedupe_key(snapshot.role, name, text, snapshot.target_url, snapshot.input_type)
@@ -382,14 +390,22 @@ class SemanticObservationEngine:
         )
 
         while len(str(fitted.to_llm_context())) > self._settings.max_total_chars:
-            if sections:
+            if len(elements) > 12:
+                elements.pop()
+            elif len(sections) > 1:
                 sections.pop()
+            elif len(fields) > 4:
+                fields.pop()
+            elif len(dialogs) > 1:
+                dialogs.pop()
             elif elements:
                 elements.pop()
             elif fields:
                 fields.pop()
             elif dialogs:
                 dialogs.pop()
+            elif sections:
+                sections.pop()
             else:
                 break
             fitted = _copy_observation_with(
@@ -415,6 +431,47 @@ def _build_focused_element(
         input_type=snapshot.input_type,
         value_state=snapshot.value_state,
     )
+
+
+def _browser_section_priority(snapshot: BrowserSectionSnapshot) -> int:
+    role = snapshot.role.casefold()
+    text = f"{snapshot.heading or ''} {snapshot.text[:240]}".casefold()
+    score = {
+        "main": 120,
+        "article": 110,
+        "region": 90,
+        "search": 90,
+        "form": 80,
+        "aside": 50,
+        "banner": 20,
+        "navigation": 10,
+        "contentinfo": 5,
+    }.get(role, 40)
+    if any(term in text for term in ("result", "search", "результат", "поиск")):
+        score += 20
+    return score
+
+
+def _browser_interactive_priority(snapshot: BrowserInteractiveElementSnapshot) -> int:
+    role = snapshot.role.casefold()
+    name = (snapshot.accessible_name or snapshot.visible_text or "").strip()
+    score = 0
+    if snapshot.state.disabled:
+        score -= 100
+    if role == "link" and snapshot.target_url:
+        score += 45
+        score += min(snapshot.target_url.count("/"), 8)
+    elif role in {"button", "menuitem", "tab"}:
+        score += 35
+    elif role in {"searchbox", "textbox", "combobox"}:
+        score += 30
+    if snapshot.input_type in {"search", "submit"}:
+        score += 20
+    if name:
+        score += min(len(name) // 8, 20)
+        if len(name.split()) >= 3:
+            score += 10
+    return score
 
 
 def _build_summary(

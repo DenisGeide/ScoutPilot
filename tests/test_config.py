@@ -17,11 +17,11 @@ def test_config_loads_defaults_without_env_file(tmp_path):
     assert config.llm_timeout_seconds == 30.0
     assert config.llm_max_output_tokens == 1200
     assert config.observation_max_sections == 12
-    assert config.observation_max_interactive_elements == 40
+    assert config.observation_max_interactive_elements == 60
     assert config.observation_max_form_fields == 25
     assert config.observation_max_dialogs == 5
     assert config.observation_max_section_chars == 700
-    assert config.observation_max_total_chars == 6000
+    assert config.observation_max_total_chars == 12000
     assert config.require_confirmation is True
     assert config.max_context_tokens == 12000
 

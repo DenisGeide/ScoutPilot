@@ -54,7 +54,7 @@ def test_generic_vacancy_demo_reads_three_pages_and_records_security_pause(tmp_p
         assert "data-applied" not in serialized
 
 
-def test_demo_stops_before_unconfirmed_search_fill(tmp_path):
+def test_demo_search_does_not_require_confirmation(tmp_path):
     start_page = _write_site_a(tmp_path / "site")
 
     result = _run_demo(
@@ -65,11 +65,10 @@ def test_demo_stops_before_unconfirmed_search_fill(tmp_path):
         probe_security=False,
     )
 
-    assert result.success is False
-    assert result.stop_reason == "confirmation_required"
-    assert result.notes == ()
-    assert result.security_pauses
-    assert result.security_pauses[0]["tool_name"] == "browser.fill_by_label"
+    assert result.success is True
+    assert result.stop_reason == "completed"
+    assert len(result.notes) == 3
+    assert result.security_pauses == ()
 
 
 def test_demo_records_blocker_for_local_hh_like_blocking_page(tmp_path):

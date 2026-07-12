@@ -49,12 +49,35 @@ _SAFE_KEYS = {
     "pageup",
     "pagedown",
 }
+_DISCOVERY_ACTION_TERMS = (
+    "search",
+    "find",
+    "lookup",
+    "query",
+    "keyword",
+    "filter",
+    "filters",
+    "sort",
+    "show result",
+    "show vacancies",
+    "job search",
+    "vacancy search",
+    "поиск",
+    "искать",
+    "найти",
+    "запрос",
+    "ключев",
+    "фильтр",
+    "сортир",
+    "показать результат",
+    "показать ваканс",
+)
+_DISCOVERY_SUBMIT_TERMS = frozenset({"apply", "submit", "order"})
 _EXTERNAL_SIDE_EFFECT_TERMS = (
     "send",
     "submit",
     "apply",
     "application",
-    "vacancy",
     "purchase",
     "buy",
     "checkout",
@@ -73,7 +96,6 @@ _EXTERNAL_SIDE_EFFECT_TERMS = (
     "отправ",
     "подать",
     "отклик",
-    "ваканс",
     "куп",
     "оплат",
     "заказ",
@@ -332,6 +354,9 @@ class DeterministicSecurityPolicy:
             )
 
         if request.name in {"browser.fill", "browser.fill_by_label"}:
+            safe_search_fill = _classify_safe_search_fill(request, context)
+            if safe_search_fill is not None:
+                return safe_search_fill
             return ActionClassification(
                 risk=ActionRisk.SENSITIVE,
                 action="ввести данные в поле формы",
@@ -342,7 +367,7 @@ class DeterministicSecurityPolicy:
             )
 
         if request.name == "browser.press_key":
-            return _classify_key_press(request)
+            return _classify_key_press(request, context)
 
         if request.name == "browser.click":
             return _classify_click(request, context)
@@ -434,7 +459,10 @@ def build_security_request_signature(
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _classify_key_press(request: ToolRequest) -> ActionClassification:
+def _classify_key_press(
+    request: ToolRequest,
+    context: SecurityEvaluationContext,
+) -> ActionClassification:
     key = str(request.arguments.get("key", "")).casefold().strip()
     normalized_key = key.replace("+", "").replace("-", "").replace("_", "").replace(" ", "")
     if normalized_key in _SAFE_KEYS:
@@ -444,6 +472,16 @@ def _classify_key_press(request: ToolRequest) -> ActionClassification:
             expected_consequence="Клавиша используется для навигации по странице или отмены действия.",
         )
     if "enter" in normalized_key or "return" in normalized_key:
+        if _focused_element_is_search(context.observation):
+            return ActionClassification(
+                risk=ActionRisk.SAFE,
+                action="запустить поиск клавишей Enter",
+                expected_consequence=(
+                    "Поисковый запрос будет выполнен без отправки сообщения, отклика, заказа "
+                    "или изменения пользовательских данных."
+                ),
+                matched_terms=("search_enter",),
+            )
         return ActionClassification(
             risk=ActionRisk.EXTERNAL_SIDE_EFFECT,
             action="нажать Enter",
@@ -485,6 +523,16 @@ def _classify_click(
             action=f"нажать «{_element_name(element)}»",
             expected_consequence="Данные могут быть удалены, отменены или перемещены в корзину/спам.",
             matched_terms=matched,
+        )
+    if _is_safe_discovery_action(text):
+        return ActionClassification(
+            risk=ActionRisk.SAFE,
+            action=f"нажать «{_element_name(element)}»",
+            expected_consequence=(
+                "Действие запускает поиск, фильтрацию или сортировку и не выглядит отправкой "
+                "сообщения, откликом, покупкой или изменением пользовательских данных."
+            ),
+            matched_terms=_matched_terms(text, _DISCOVERY_ACTION_TERMS),
         )
     matched = _matched_terms(text, _EXTERNAL_SIDE_EFFECT_TERMS)
     if matched:
@@ -565,6 +613,16 @@ def _classification_from_action_text(text: str, *, action: str) -> ActionClassif
             action=action,
             expected_consequence="Данные могут быть удалены, отменены или перемещены в корзину/спам.",
             matched_terms=matched,
+        )
+    if _is_safe_discovery_action(normalized):
+        return ActionClassification(
+            risk=ActionRisk.SAFE,
+            action=action,
+            expected_consequence=(
+                "Действие запускает поиск, фильтрацию или сортировку и не выглядит отправкой "
+                "сообщения, откликом, покупкой или изменением пользовательских данных."
+            ),
+            matched_terms=_matched_terms(normalized, _DISCOVERY_ACTION_TERMS),
         )
     matched = _matched_terms(normalized, _EXTERNAL_SIDE_EFFECT_TERMS)
     if matched:
@@ -705,9 +763,161 @@ def _element_name(element: InteractiveElement) -> str:
     )
 
 
+def _classify_safe_search_fill(
+    request: ToolRequest,
+    context: SecurityEvaluationContext,
+) -> ActionClassification | None:
+    observation = context.observation
+    candidate_text = ""
+    candidate_role = ""
+    candidate_input_type = ""
+
+    if observation is not None and request.name == "browser.fill":
+        element_id = str(request.arguments.get("element_id", "")).strip()
+        field = next(
+            (field for field in observation.form_fields if field.field_id == element_id),
+            None,
+        )
+        if field is not None:
+            candidate_text = " ".join(
+                value
+                for value in (
+                    field.label,
+                    field.placeholder,
+                    field.field_name,
+                )
+                if value
+            )
+            candidate_role = field.role
+            candidate_input_type = field.input_type or ""
+
+    if observation is not None and request.name == "browser.fill_by_label":
+        target = str(request.arguments.get("label", "")).strip()
+        resolution = SemanticNavigationResolver().resolve_form_field(
+            observation,
+            target,
+            _optional_argument(request.arguments, "context"),
+        )
+        if resolution.is_resolved and resolution.selected is not None:
+            candidate = resolution.selected
+            candidate_text = " ".join(
+                value
+                for value in (
+                    candidate.name,
+                    candidate.visible_text,
+                    candidate.context,
+                    target,
+                )
+                if value
+            )
+            candidate_role = candidate.role
+            candidate_input_type = candidate.input_type or ""
+
+    if not candidate_text and request.name == "browser.fill_by_label":
+        candidate_text = " ".join(
+            value
+            for value in (
+                str(request.arguments.get("label", "")).strip(),
+                str(request.arguments.get("context", "")).strip(),
+            )
+            if value
+        )
+
+    if not _is_search_field_semantics(
+        candidate_text,
+        role=candidate_role,
+        input_type=candidate_input_type,
+    ):
+        return None
+
+    return ActionClassification(
+        risk=ActionRisk.SAFE,
+        action="ввести поисковый запрос",
+        expected_consequence=(
+            "Текст будет введен только в поле поиска; отправка сообщения, отклика, заказа "
+            "или изменение пользовательских данных не выполняются."
+        ),
+        matched_terms=("search_field",),
+    )
+
+
+def _focused_element_is_search(observation: PageObservation | None) -> bool:
+    if observation is None or observation.focused_element is None:
+        return False
+    focused = observation.focused_element
+    focused_text = " ".join(
+        value
+        for value in (focused.accessible_name, focused.visible_text)
+        if value
+    )
+    if _is_search_field_semantics(
+        focused_text,
+        role=focused.role,
+        input_type=focused.input_type or "",
+    ):
+        return True
+
+    focused_name = _normalize(focused.accessible_name or focused.visible_text or "")
+    for field in observation.form_fields:
+        field_names = {
+            _normalize(field.label or ""),
+            _normalize(field.placeholder or ""),
+            _normalize(field.field_name or ""),
+        }
+        if focused_name and focused_name in field_names:
+            field_text = " ".join(
+                value
+                for value in (field.label, field.placeholder, field.field_name)
+                if value
+            )
+            return _is_search_field_semantics(
+                field_text,
+                role=field.role,
+                input_type=field.input_type or "",
+            )
+    return False
+
+
+def _is_search_field_semantics(text: str, *, role: str, input_type: str) -> bool:
+    normalized_role = _normalize(role)
+    normalized_type = _normalize(input_type)
+    normalized_text = _normalize(text)
+    if normalized_type in {"password", "email", "tel", "file", "hidden"}:
+        return False
+    if normalized_role == "searchbox" or normalized_type == "search":
+        return True
+    if normalized_role not in {"", "textbox", "combobox", "input"}:
+        return False
+    if _matched_terms(normalized_text, _SENSITIVE_TERMS):
+        return False
+    return bool(_matched_terms(normalized_text, _DISCOVERY_ACTION_TERMS))
+
+
+def _is_safe_discovery_action(text: str) -> bool:
+    discovery_terms = _matched_terms(text, _DISCOVERY_ACTION_TERMS)
+    if not discovery_terms:
+        return False
+    if _matched_terms(text, _DESTRUCTIVE_TERMS):
+        return False
+    external_terms = set(_matched_terms(text, _EXTERNAL_SIDE_EFFECT_TERMS))
+    return external_terms.issubset(_DISCOVERY_SUBMIT_TERMS)
+
+
 def _matched_terms(text: str, terms: Sequence[str]) -> tuple[str, ...]:
     normalized = _normalize(text)
-    return tuple(term for term in terms if term in normalized)
+    return tuple(term for term in terms if _term_matches(normalized, term))
+
+
+def _term_matches(text: str, term: str) -> bool:
+    normalized_term = _normalize(term)
+    if not normalized_term:
+        return False
+    if normalized_term.isascii() and all(
+        character.isalnum() or character.isspace() for character in normalized_term
+    ):
+        pattern = r"(?<![a-z0-9])" + re.escape(normalized_term) + r"(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+    return normalized_term in text
 
 
 def _normalize(text: str) -> str:

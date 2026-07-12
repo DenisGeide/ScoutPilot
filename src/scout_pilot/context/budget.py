@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from scout_pilot.models import (
     ContextBudget,
     DialogSummary,
+    InteractiveElement,
     PageIssue,
     PageIssueCode,
     PageObservation,
@@ -599,7 +600,7 @@ def _dedupe_observation(
         key=_section_dedupe_key,
     )
     elements, element_dupes = _dedupe_sequence(
-        observation.interactive_elements,
+        _prioritized_interactive_elements(observation.interactive_elements),
         key=lambda element: _normalize(
             f"{element.role}:{element.accessible_name}:{element.visible_text}:{element.target_url}"
         ),
@@ -632,6 +633,42 @@ def _section_dedupe_key(section: SemanticSection) -> str:
     if _section_priority(section) <= 20:
         return normalized_text
     return _normalize(f"{section.role}:{section.heading}:{section.text}")
+
+
+def _prioritized_interactive_elements(
+    elements: Sequence[InteractiveElement],
+) -> tuple[InteractiveElement, ...]:
+    return tuple(
+        element
+        for _, _, element in sorted(
+            (
+                (_interactive_element_priority(element), index, element)
+                for index, element in enumerate(elements)
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+    )
+
+
+def _interactive_element_priority(element: InteractiveElement) -> int:
+    role = element.role.casefold()
+    name = (element.accessible_name or element.visible_text or "").strip()
+    target_url = element.target_url or ""
+    input_type = (element.input_type or "").casefold()
+    score = -100 if element.state.disabled else 0
+    if role == "link" and target_url:
+        score += 45 + min(target_url.count("/"), 8)
+    elif role in {"button", "menuitem", "tab"}:
+        score += 35
+    elif role in {"searchbox", "textbox", "combobox"}:
+        score += 30
+    if input_type in {"search", "submit"}:
+        score += 20
+    if name:
+        score += min(len(name) // 8, 20)
+        if len(name.split()) >= 3:
+            score += 10
+    return score
 
 
 def _prioritized_sections(

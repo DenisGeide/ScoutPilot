@@ -121,7 +121,6 @@ scout-pilot demo-vacancy-search `
   --query "AI Engineer Python AI Developer" `
   --max-vacancies 3 `
   --headed `
-  --confirm-search-fill `
   --report-path reports/tmp/hh-demo-report.json
 ```
 

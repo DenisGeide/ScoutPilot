@@ -286,12 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument(
         "--confirm-search-fill",
         action="store_true",
-        help="Явно подтвердить ввод поискового запроса в поле страницы.",
+        help="Устаревший совместимый флаг: безопасный ввод в поиск разрешается автоматически.",
     )
     demo_parser.add_argument(
         "--confirm-search-submit",
         action="store_true",
-        help="Явно подтвердить запуск поиска, если он выглядит как отправка формы.",
+        help="Устаревший совместимый флаг: безопасный запуск поиска разрешается автоматически.",
     )
     demo_parser.add_argument(
         "--probe-security",

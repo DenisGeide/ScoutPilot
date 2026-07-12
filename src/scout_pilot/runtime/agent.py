@@ -1386,7 +1386,9 @@ def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object]
             requires_user_input=False,
             safe_dismiss_allowed=True,
         )
-    if PageIssueCode.EMPTY_PAGE in issue_codes or PageIssueCode.LOADING in issue_codes:
+    if PageIssueCode.EMPTY_PAGE in issue_codes or (
+        PageIssueCode.LOADING in issue_codes and not _has_useful_page_content(observation)
+    ):
         return _blocker_decision(
             blocker_type="empty_or_loading_page",
             runtime_response="observe_or_replan",
@@ -1400,6 +1402,15 @@ def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object]
             safe_dismiss_allowed=False,
         )
     return None
+
+
+def _has_useful_page_content(observation: PageObservation) -> bool:
+    return bool(
+        observation.sections
+        or observation.interactive_elements
+        or observation.form_fields
+        or observation.dialogs
+    )
 
 
 def _blocker_decision(

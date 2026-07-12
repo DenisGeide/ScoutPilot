@@ -21,6 +21,7 @@ from scout_pilot.models import (
     PageObservation,
     PlanStep,
     RuntimeStatus,
+    SemanticSection,
     ToolRequest,
     UserTask,
 )
@@ -30,6 +31,7 @@ from scout_pilot.runtime import (
     RuntimeSettings,
     TaskTerminationReason,
 )
+from scout_pilot.runtime.agent import _page_blocker_decision
 from scout_pilot.observation import SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
 from scout_pilot.tools.types import (
@@ -334,6 +336,33 @@ def test_runtime_records_region_prompt_without_treating_it_as_captcha():
     assert blocker_event.details["stop"] is False
     assert blocker_event.details["requires_user_input"] is True
     assert provider.requests
+
+
+def test_runtime_does_not_treat_background_loading_as_empty_when_content_is_useful():
+    observation = PageObservation(
+        url="https://example.test/results",
+        title="Search results",
+        summary="Three results are visible.",
+        sections=[
+            SemanticSection(
+                section_id="section_results",
+                role="main",
+                heading="Results",
+                text="AI Engineer, Python AI Developer, LLM Engineer",
+            )
+        ],
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_result",
+                role="link",
+                accessible_name="AI Engineer",
+                visible_text="AI Engineer",
+            )
+        ],
+        issues=[PageIssue(PageIssueCode.LOADING, "Background requests are active.")],
+    )
+
+    assert _page_blocker_decision(observation) is None
 
 
 def test_runtime_waits_for_confirmation_when_reasoning_requests_it():

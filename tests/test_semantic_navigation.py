@@ -395,13 +395,9 @@ def _run_semantic_search_flow(profile_dir: Path, page_path: Path) -> str | None:
                     "browser.fill_by_label",
                     {"label": "search", "value": "alpha"},
                 )
-                paused = await runtime.execute(fill_request)
-                assert paused.status is ToolExecutionStatus.PAUSED
-                confirmation = paused.data["confirmation"]
-                assert runtime.confirm_pending_action(str(confirmation["confirmation_id"])) is True
-
                 filled = await runtime.execute(fill_request)
                 assert filled.success is True
+                assert filled.status is ToolExecutionStatus.SUCCESS
                 assert runtime.history[-1].arguments == {
                     "label": "search",
                     "value": "[REDACTED]",

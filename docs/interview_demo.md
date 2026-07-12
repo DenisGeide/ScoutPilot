@@ -108,11 +108,10 @@ scout-pilot demo-vacancy-search `
   --query "AI Engineer Python AI Developer" `
   --max-vacancies 3 `
   --headed `
-  --confirm-search-fill `
   --report-path reports/tmp/hh-demo-report.json `
   --replay-path reports/tmp/hh-demo-replay.json
 ```
 
-Если сайт требует подтверждения запуска поиска, повторите с `--confirm-search-submit`. Не подтверждайте отклики, сообщения, загрузку файлов или отправку заявок для демонстрации.
+Поиск и фильтры выполняются без подтверждения, если Security Policy однозначно распознала их семантику. Не подтверждайте отклики, сообщения, загрузку файлов или отправку заявок для демонстрации.
 
 Live HH.ru может показать CAPTCHA, вход или выбор региона. Это нормальная причина остановки; не подменяйте ее заранее подготовленной удачной записью.

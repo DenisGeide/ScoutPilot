@@ -40,11 +40,11 @@ class AppConfig:
     browser_navigation_timeout_ms: int = 15000
     browser_screenshots_dir: Path = Path("reports/tmp/screenshots")
     observation_max_sections: int = 12
-    observation_max_interactive_elements: int = 40
+    observation_max_interactive_elements: int = 60
     observation_max_form_fields: int = 25
     observation_max_dialogs: int = 5
     observation_max_section_chars: int = 700
-    observation_max_total_chars: int = 6000
+    observation_max_total_chars: int = 12000
     reports_dir: Path = Path("reports")
     llm_provider: str = "openai"
     llm_model: str = "gpt-4.1-mini"
@@ -88,7 +88,7 @@ class AppConfig:
                 variable_name="SCOUT_PILOT_OBSERVATION_MAX_SECTIONS",
             ),
             observation_max_interactive_elements=_parse_positive_int(
-                values.get("SCOUT_PILOT_OBSERVATION_MAX_INTERACTIVE_ELEMENTS", "40"),
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_INTERACTIVE_ELEMENTS", "60"),
                 variable_name="SCOUT_PILOT_OBSERVATION_MAX_INTERACTIVE_ELEMENTS",
             ),
             observation_max_form_fields=_parse_positive_int(
@@ -104,7 +104,7 @@ class AppConfig:
                 variable_name="SCOUT_PILOT_OBSERVATION_MAX_SECTION_CHARS",
             ),
             observation_max_total_chars=_parse_positive_int(
-                values.get("SCOUT_PILOT_OBSERVATION_MAX_TOTAL_CHARS", "6000"),
+                values.get("SCOUT_PILOT_OBSERVATION_MAX_TOTAL_CHARS", "12000"),
                 variable_name="SCOUT_PILOT_OBSERVATION_MAX_TOTAL_CHARS",
             ),
             reports_dir=Path(values.get("SCOUT_PILOT_REPORTS_DIR", "reports")),

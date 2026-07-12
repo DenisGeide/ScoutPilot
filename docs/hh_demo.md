@@ -29,7 +29,6 @@ scout-pilot demo-vacancy-search `
   --query "AI Engineer Python AI Developer" `
   --max-vacancies 3 `
   --headed `
-  --confirm-search-fill `
   --probe-security `
   --report-path reports/tmp/hh-demo-report.json `
   --replay-path reports/tmp/hh-demo-replay.json
@@ -39,7 +38,7 @@ scout-pilot demo-vacancy-search `
 
 - открыть URL, переданный пользователем;
 - найти поле поиска через semantic observation;
-- ввести поисковый запрос только после явного флага `--confirm-search-fill`;
+- ввести запрос в семантически распознанное поле поиска без лишней паузы;
 - открыть до трех найденных страниц по обнаруженным ссылкам;
 - подготовить короткие заметки;
 - остановиться до отклика, сообщения или отправки формы. Если указан `--probe-security`, агент пробует найти действие типа отклика и должен остановиться на Security Policy до клика;
@@ -49,7 +48,6 @@ scout-pilot demo-vacancy-search `
 
 - `Открыл стартовую страницу.`
 - `Нашел поле поиска.`
-- `Запрос требует подтверждения.`
 - `Нашел N кандидатов.`
 - `Читаю страницу 1/N.`
 - `Остановился перед внешним действием.`
@@ -63,23 +61,9 @@ scout-pilot demo-vacancy-search `
 - `security_pauses` — действия, которые Security Policy остановила до внешнего эффекта;
 - `final_notes` — итоговые заметки по прочитанным страницам.
 
-## Если поиск требует подтверждения
+## Как работает подтверждение
 
-Некоторые сайты запускают поиск через submit-кнопку. Если CLI остановился на подтверждении запуска поиска, прочитайте сообщение безопасности и повторите команду с дополнительным флагом:
-
-```powershell
-scout-pilot demo-vacancy-search `
-  --start-url https://hh.ru `
-  --query "AI Engineer Python AI Developer" `
-  --max-vacancies 3 `
-  --headed `
-  --confirm-search-fill `
-  --confirm-search-submit `
-  --report-path reports/tmp/hh-demo-report.json `
-  --replay-path reports/tmp/hh-demo-replay.json
-```
-
-`--confirm-search-submit` разрешает только запуск поиска. Он не подтверждает отклики, сообщения, отправку заявок или загрузку файлов.
+Ввод поискового запроса, поисковый submit, фильтры и сортировка классифицируются как безопасные действия чтения и выполняются сразу. Подтверждение остается обязательным для отклика, сообщения, удаления, оплаты, публикации, загрузки приватного файла и других действий с внешним эффектом. Модель не может сама изменить эту классификацию.
 
 ## Проверка Security Policy
 

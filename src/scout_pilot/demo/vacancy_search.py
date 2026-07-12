@@ -254,16 +254,13 @@ class VacancySearchDemoRunner:
                 fill_request,
                 report=report,
                 phase="fill_search_query",
-                auto_confirm=settings.confirm_search_fill,
-                confirmation_source="confirm_search_fill_flag",
                 progress=emit,
             )
             if fill_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
-                    "Демо остановлено до ввода поискового запроса: Security Policy требует "
-                    "явное подтверждение, потому что поле формы может затронуть данные на странице. "
-                    "Действие не выполнено. Чтобы продолжить только ввод запроса, повторите команду "
-                    "с --confirm-search-fill. Чтобы отменить, ничего подтверждать не нужно."
+                    "Демо остановлено до ввода запроса: поле не удалось однозначно распознать "
+                    "как безопасный поиск. Действие не выполнено; проверьте видимую подпись поля "
+                    "и состояние страницы."
                 )
                 return _final_result(report, settings, notes, False, "confirmation_required", message_ru)
             if not fill_result.success:
@@ -286,16 +283,13 @@ class VacancySearchDemoRunner:
                 ),
                 report=report,
                 phase="run_search",
-                auto_confirm=settings.confirm_search_submit,
-                confirmation_source="confirm_search_submit_flag",
                 progress=emit,
             )
             if search_result.status is ToolExecutionStatus.PAUSED:
                 message_ru = (
-                    "Демо остановлено до запуска поиска: кнопка выглядит как отправка формы, "
-                    "поэтому Security Policy требует явное подтверждение. Действие не выполнено. "
-                    "Чтобы продолжить только запуск поиска, повторите команду с "
-                    "--confirm-search-submit. Чтобы отменить, ничего подтверждать не нужно."
+                    "Демо остановлено до запуска поиска: кнопку не удалось однозначно отличить "
+                    "от внешнего действия. Ничего не нажато; проверьте семантическое наблюдение "
+                    "и уточните цель."
                 )
                 return _final_result(report, settings, notes, False, "confirmation_required", message_ru)
             if not search_result.success:
