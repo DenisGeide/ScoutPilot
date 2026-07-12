@@ -5,6 +5,7 @@ from scout_pilot.runtime.types import (
     AgentProgress,
     AgentState,
     AgentTaskResult,
+    DEFAULT_MAX_AGENT_STEPS,
     RuntimeSettings,
     TaskTerminationReason,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "AgentState",
     "AgentTaskResult",
     "AutonomousAgentRuntime",
+    "DEFAULT_MAX_AGENT_STEPS",
     "RuntimeSettings",
     "TaskTerminationReason",
 ]

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from scout_pilot.config import AppConfig
+from scout_pilot.runtime.types import DEFAULT_MAX_AGENT_STEPS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,10 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Насколько подробно показывать ход выполнения из меню.",
     )
     menu_parser.add_argument(
+        "--max-actions",
         "--max-iterations",
+        dest="max_iterations",
         type=int,
-        default=8,
-        help="Максимум observe/think/tool итераций для live-запуска из меню.",
+        default=DEFAULT_MAX_AGENT_STEPS,
+        help="Максимум автономных шагов агента на одну задачу.",
     )
     menu_parser.add_argument(
         "--headless",
@@ -157,10 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM-провайдер для live-режима. По умолчанию берется из .env.",
     )
     run_parser.add_argument(
+        "--max-actions",
         "--max-iterations",
+        dest="max_iterations",
         type=int,
-        default=8,
-        help="Максимум observe/think/tool итераций в live-режиме.",
+        default=DEFAULT_MAX_AGENT_STEPS,
+        help="Максимум автономных шагов агента на одну задачу.",
     )
     run_parser.add_argument(
         "--headless",
@@ -202,10 +207,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="LLM-провайдер для live-задач. По умолчанию берется из .env.",
     )
     interactive_parser.add_argument(
+        "--max-actions",
         "--max-iterations",
+        dest="max_iterations",
         type=int,
-        default=8,
-        help="Максимум observe/think/tool итераций для одной live-задачи.",
+        default=DEFAULT_MAX_AGENT_STEPS,
+        help="Максимум автономных шагов агента на одну live-задачу.",
     )
     interactive_parser.add_argument(
         "--headless",
@@ -375,10 +382,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Показывать компактную/подробную live-трассу инструментов.",
     )
     live_local_parser.add_argument(
+        "--max-actions",
         "--max-iterations",
+        dest="max_iterations",
         type=int,
         default=8,
-        help="Максимум observe/think/tool итераций.",
+        help="Максимум автономных шагов агента в локальном demo.",
     )
     live_local_parser.add_argument(
         "--site-dir",
@@ -662,7 +671,7 @@ async def _menu_run_agent(args: argparse.Namespace) -> int:
     print("Команды: /url - сменить сайт, /report - последний отчет, /debug - подробный режим, /exit - выйти.")
     start_url = _menu_prompt_start_url()
     provider = _menu_fast_provider(args, start_url)
-    print(f"Провайдер: {provider}. Итераций на задачу: {args.max_iterations}.")
+    print(f"Провайдер: {provider}. Лимит шагов агента на задачу: {args.max_iterations}.")
     return await _menu_chat_session(
         args,
         start_url=start_url,

@@ -85,7 +85,7 @@ class RuntimeDashboard:
             (
                 f"Задача: {self.state.task}",
                 f"Состояние: {self.state.state}",
-                f"Итерация: {self.state.iteration}",
+                f"Шаг агента: {self.state.iteration}",
                 f"Текущий шаг: {self.state.current_step}",
                 f"Шаг плана: {self.state.plan_step}",
                 f"Краткое наблюдение: {self.state.observation_summary}",
@@ -131,8 +131,8 @@ def _progress_text(progress: Mapping[object, object]) -> str:
     iteration = progress.get("iteration", 0)
     max_iterations = progress.get("max_iterations", 0)
     if total:
-        return f"{completed}/{total} шагов, итерация {iteration}/{max_iterations}"
-    return f"итерация {iteration}/{max_iterations}"
+        return f"{completed}/{total} шагов плана, шаг агента {iteration}/{max_iterations}"
+    return f"шаг агента {iteration}/{max_iterations}"
 
 
 def _iteration_text(progress: Mapping[object, object]) -> str:

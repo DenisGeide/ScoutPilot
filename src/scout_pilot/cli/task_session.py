@@ -30,7 +30,12 @@ from scout_pilot.reporting import (
     RuntimeReportRecorder,
     sanitize_for_report,
 )
-from scout_pilot.runtime import AutonomousAgentRuntime, RuntimeSettings, TaskTerminationReason
+from scout_pilot.runtime import (
+    DEFAULT_MAX_AGENT_STEPS,
+    AutonomousAgentRuntime,
+    RuntimeSettings,
+    TaskTerminationReason,
+)
 from scout_pilot.tools.types import ToolExecutionResult, ToolExecutionStatus, ToolSchema
 
 
@@ -50,7 +55,7 @@ class CliTaskSettings:
     dashboard: str = "compact"
     start_url: str | None = None
     provider: str | None = None
-    max_iterations: int = 8
+    max_iterations: int = DEFAULT_MAX_AGENT_STEPS
     headless: bool = False
     browser_profile_dir: Path | None = None
     slow_mo_ms: int | None = None
@@ -838,7 +843,10 @@ def _result_message_ru(result) -> str:
             "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
         )
     if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
-        return "Достигнут лимит итераций. Попробуйте сузить задачу или задать стартовый URL."
+        return (
+            "Достигнут лимит автономных шагов агента. Это защитный лимит одной задачи, "
+            "а не количество запущенных задач. Увеличьте --max-actions или уточните запрос."
+        )
     if result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED:
         return "Достигнут лимит повторных ошибок. Агент остановился, чтобы не зациклиться."
     if result.termination_reason is TaskTerminationReason.CANCELLED:

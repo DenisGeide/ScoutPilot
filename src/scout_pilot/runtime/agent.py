@@ -1600,7 +1600,10 @@ def _user_message_ru_for_result(result: AgentTaskResult) -> str:
             "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
         )
     if result.termination_reason is TaskTerminationReason.MAX_ITERATIONS_EXCEEDED:
-        return "Достигнут лимит итераций. Попробуйте сузить задачу или начать с более конкретной страницы."
+        return (
+            "Достигнут лимит автономных шагов агента для одной задачи. "
+            "Увеличьте --max-actions или начните с более конкретной страницы."
+        )
     if result.termination_reason is TaskTerminationReason.MAX_FAILURES_EXCEEDED:
         return "Достигнут лимит повторных ошибок. Агент остановился, чтобы не выполнять одно и то же действие без пользы."
     if result.termination_reason is TaskTerminationReason.TOOL_FAILURE:

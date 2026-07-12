@@ -29,7 +29,7 @@ def test_menu_command_parses_launcher_defaults():
     assert args.command == "menu"
     assert args.provider == "codex"
     assert args.dashboard == "off"
-    assert args.max_iterations == 8
+    assert args.max_iterations == 24
     assert args.headless is False
 
 
@@ -160,6 +160,14 @@ def test_live_local_demo_command_parses_runtime_mode():
     assert args.headless is True
     assert args.max_iterations == 8
     assert args.dashboard == "verbose"
+
+
+def test_run_accepts_user_facing_max_actions_alias():
+    parser = build_parser()
+
+    args = parser.parse_args(["run", "Проверить", "--live", "--max-actions", "30"])
+
+    assert args.max_iterations == 30
 
 
 def test_mail_spam_demo_command_parses_local_mode():

@@ -384,14 +384,14 @@ def test_dashboard_renders_required_status_fields():
 
     assert "Задача: Проверить страницу" in output
     assert "Состояние: подготовка действия" in output
-    assert "Итерация: 2/4" in output
+    assert "Шаг агента: 2/4" in output
     assert "Шаг плана: Заполнить поле поиска; tool: browser.fill" in output
     assert "Краткое наблюдение: Видна форма поиска и список результатов." in output
     assert "Выбранный инструмент: заполнение поля (browser.fill)" in output
     assert 'Аргументы инструмента: {"element_id": "field_1", "value": "[REDACTED]"}' in output
     assert "Решение безопасности: ожидает проверки перед выполнением" in output
     assert "Статус результата: инструмент выбран, выполнение еще не началось" in output
-    assert "Прогресс: 2/4 шагов" in output
+    assert "Прогресс: 2/4 шагов плана, шаг агента 2/4" in output
     assert "Следующее действие: не выполнять действие в сухом запуске" in output
 
 
