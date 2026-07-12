@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from scout_pilot.llm import (
     AnthropicToolSchemaAdapter,
+    CodexCliLlmProvider,
     LlmErrorCode,
     LlmFinishReason,
     LlmMessage,
@@ -52,15 +53,82 @@ def test_provider_factory_selects_configured_adapter(monkeypatch):
     def fake_anthropic_init(self, config, client=None, tool_adapter=None):
         created.append(("anthropic", config.model))
 
+    def fake_codex_init(self, executable=None, runner=None):
+        created.append(("codex", None))
+
     monkeypatch.setattr(OpenAILlmProvider, "__init__", fake_openai_init)
     monkeypatch.setattr(AnthropicLlmProvider, "__init__", fake_anthropic_init)
+    monkeypatch.setattr(CodexCliLlmProvider, "__init__", fake_codex_init)
 
     openai_provider = create_llm_provider(_config(LlmProviderName.OPENAI))
     anthropic_provider = create_llm_provider(_config(LlmProviderName.ANTHROPIC))
+    codex_provider = create_llm_provider(_config(LlmProviderName.CODEX))
 
     assert isinstance(openai_provider, OpenAILlmProvider)
     assert isinstance(anthropic_provider, AnthropicLlmProvider)
-    assert created == [("openai", "test-model"), ("anthropic", "test-model")]
+    assert isinstance(codex_provider, CodexCliLlmProvider)
+    assert created == [
+        ("openai", "test-model"),
+        ("anthropic", "test-model"),
+        ("codex", None),
+    ]
+
+
+def test_codex_cli_provider_parses_text_and_tool_calls():
+    outputs = iter(
+        (
+            json.dumps(
+                {
+                    "content": "Готово.",
+                    "tool_name": "",
+                    "tool_arguments_json": "{}",
+                    "finish_reason": "stop",
+                }
+            ),
+            json.dumps(
+                {
+                    "content": "",
+                    "tool_name": "browser.navigate",
+                    "tool_arguments_json": '{"url":"https://example.test"}',
+                    "finish_reason": "tool_calls",
+                }
+            ),
+        )
+    )
+
+    async def fake_runner(executable, prompt, timeout):
+        assert executable == "codex.cmd"
+        assert "browser.navigate" in prompt
+        assert timeout == 2
+        return 0, next(outputs), ""
+
+    provider = CodexCliLlmProvider(executable="codex.cmd", runner=fake_runner)
+
+    text_result = asyncio.run(provider.complete(_request()))
+    tool_result = asyncio.run(provider.complete(_request()))
+
+    assert text_result.success is True
+    assert text_result.response.content == "Готово."
+    assert text_result.response.raw_provider_name == "codex_cli"
+    assert tool_result.success is True
+    assert tool_result.response.tool_calls == (
+        LlmToolCall(
+            name="browser.navigate",
+            arguments={"url": "https://example.test"},
+        ),
+    )
+
+
+def test_codex_cli_provider_rejects_malformed_output():
+    async def fake_runner(executable, prompt, timeout):
+        return 0, "not-json", ""
+
+    provider = CodexCliLlmProvider(executable="codex.cmd", runner=fake_runner)
+
+    result = asyncio.run(provider.complete(_request()))
+
+    assert result.success is False
+    assert result.error.code is LlmErrorCode.MALFORMED_RESPONSE
 
 
 def test_openai_provider_parses_tool_call_response():

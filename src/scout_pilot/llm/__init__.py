@@ -1,6 +1,7 @@
 """LLM Provider layer."""
 
 from scout_pilot.llm.config import LlmProviderConfig
+from scout_pilot.llm.codex_cli_provider import CodexCliLlmProvider
 from scout_pilot.llm.factory import create_llm_provider
 from scout_pilot.llm.mock_provider import (
     DeterministicBrowserMockProvider,
@@ -29,6 +30,7 @@ from scout_pilot.llm.types import (
 
 __all__ = [
     "AnthropicToolSchemaAdapter",
+    "CodexCliLlmProvider",
     "DeterministicBrowserMockProvider",
     "DeterministicLocalDemoMockProvider",
     "LlmErrorCode",

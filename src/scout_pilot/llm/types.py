@@ -15,6 +15,7 @@ class LlmProviderName(str, Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    CODEX = "codex"
     MOCK = "mock"
 
 

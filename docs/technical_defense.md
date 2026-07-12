@@ -25,14 +25,14 @@
 - Browser Engine на Playwright с navigation, screenshots, persistent profile, ручным `profile-open` flow и cleanup;
 - Semantic Observation Engine с компактной моделью страницы;
 - Tool Runtime без привязки к провайдеру, с валидацией, timeout handling, history и security hook;
-- LLM Provider Layer для OpenAI и Anthropic с отдельными schema adapters;
+- LLM Provider Layer для OpenAI и Anthropic с отдельными schema adapters; локальный Codex CLI подключен через тот же provider-neutral контракт и не выполняет браузерные действия напрямую;
 - Planning Engine, Hierarchical Memory, Context Budgeting, Execution Intelligence и Autonomous Agent Runtime;
 - deterministic Security Policy с confirmation flow;
 - семантическая навигация по observation IDs, roles, names и visible context;
 - CLI на русском, `scout-pilot run --live`, `provider-smoke`, локальное `live-local-demo`, scripted `interview-demo`, ручной HH.ru smoke flow, JSON report/replay;
 - детерминированные тесты на локальных тестовых страницах и mocked providers.
 
-Важно: `scout-pilot run` по умолчанию остается безопасным dry-run, но с флагом `--live` запускает основной автономный runtime loop: видимый браузер, semantic observation, planning/reasoning, Tool Runtime, Security Policy, memory, context budgeting, reflection и безопасные report/replay. Для локальной воспроизводимой проверки можно использовать `--provider mock`; OpenAI/Anthropic требуют локальные ключи вне репозитория.
+Важно: `scout-pilot run` по умолчанию остается безопасным dry-run, но с флагом `--live` запускает основной автономный runtime loop: видимый браузер, semantic observation, planning/reasoning, Tool Runtime, Security Policy, memory, context budgeting, reflection и безопасные report/replay. Для локальной воспроизводимой проверки можно использовать `--provider mock`; OpenAI/Anthropic требуют локальные ключи вне репозитория, а `--provider codex` использует локальный Codex CLI с авторизацией через ChatGPT.
 
 ## Архитектура
 

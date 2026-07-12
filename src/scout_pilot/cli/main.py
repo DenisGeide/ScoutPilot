@@ -39,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     menu_parser.add_argument(
         "--provider",
-        choices=("mock", "openai", "anthropic"),
-        default="mock",
+        choices=("codex", "mock", "openai", "anthropic"),
+        default="codex",
         help="Провайдер по умолчанию для live-запуска из меню.",
     )
     menu_parser.add_argument(
@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     provider_smoke_parser.add_argument(
         "--provider",
         required=True,
-        choices=("openai", "anthropic"),
+        choices=("openai", "anthropic", "codex"),
         help="Провайдер для ручной smoke-проверки.",
     )
 
@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--provider",
-        choices=("openai", "anthropic", "mock"),
+        choices=("openai", "anthropic", "codex", "mock"),
         help="LLM-провайдер для live-режима. По умолчанию берется из .env.",
     )
     run_parser.add_argument(
@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     interactive_parser.add_argument(
         "--provider",
-        choices=("openai", "anthropic", "mock"),
+        choices=("openai", "anthropic", "codex", "mock"),
         help="LLM-провайдер для live-задач. По умолчанию берется из .env.",
     )
     interactive_parser.add_argument(
@@ -364,7 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     live_local_parser.add_argument(
         "--provider",
-        choices=("mock", "openai", "anthropic"),
+        choices=("mock", "openai", "anthropic", "codex"),
         default="mock",
         help="LLM-провайдер. Для детерминированного demo используйте mock.",
     )
@@ -490,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_console_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(verbose=args.verbose, debug=args.debug)
@@ -598,7 +599,7 @@ def _menu_lines() -> tuple[str, ...]:
         "0 - Чат с агентом: сайт открыт, задачи пишутся обычным текстом",
         "1 - Локальное demo вакансий через реальный runtime",
         "2 - Открыть persistent profile для ручного входа",
-        "3 - Проверить live-провайдера OpenAI/Anthropic",
+        "3 - Проверить live-провайдера Codex/OpenAI/Anthropic",
         "4 - Показать краткую сводку последнего report/replay",
         "5 - Проверить окружение командой doctor",
         "6 - Быстро проверить запуск браузера",
@@ -1029,7 +1030,9 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
         title = str(details.get("title") or "").strip()
         return f"вижу страницу: {title}." if title else "смотрю страницу."
     if name == "page_blocker_detected":
-        return str(details.get("message") or "на странице есть блокер, я не буду его обходить.")
+        if details.get("stop") is True:
+            return "на странице есть блокер; я не буду обходить CAPTCHA или автоматизировать вход."
+        return "страница еще загружается или пока пуста; проверяю доступный контекст."
     if name == "tool_selected":
         tool = str(details.get("selected_tool") or details.get("tool_name") or "")
         action = _menu_tool_action_ru(tool)
@@ -1136,8 +1139,8 @@ async def _menu_open_profile(args: argparse.Namespace) -> int:
 async def _menu_provider_smoke() -> int:
     provider = _menu_choice(
         "Провайдер для smoke-проверки",
-        ("openai", "anthropic"),
-        default="openai",
+        ("codex", "openai", "anthropic"),
+        default="codex",
     )
     return await _run_provider_smoke(argparse.Namespace(provider=provider))
 
@@ -1763,6 +1766,20 @@ def _configure_logging(*, verbose: bool, debug: bool) -> None:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(_StructuredLogFormatter())
     logging.basicConfig(level=level, handlers=[handler], force=True)
+
+
+def _configure_console_streams() -> None:
+    """Prevent uncommon page/model characters from crashing Windows terminals."""
+
+    if not sys.platform.startswith("win"):
+        return
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                continue
 
 
 class _StructuredLogFormatter(logging.Formatter):

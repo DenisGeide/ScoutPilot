@@ -64,7 +64,16 @@ scout-pilot status
 scout-pilot menu
 ```
 
-В меню пункт `0` открывает чат с агентом: сначала вводится URL сайта, затем браузер остается открытым, а в строку `Вы >` можно писать обычные задачи подряд. Enter на URL открывает `https://hh.ru`. Команды внутри режима: `/url` сменить сайт, `/report` показать последний replay/report, `/debug` включить подробный trace, `/exit` выйти и закрыть браузер. Пункты `1`-`8` открывают готовые проверки, report/replay, persistent profile и provider smoke.
+По умолчанию меню использует локальный Codex CLI, авторизованный через ChatGPT: отдельный API-ключ в `.env` для этого режима не нужен. Установка и проверка:
+
+```powershell
+npm install -g @openai/codex
+codex login
+scout-pilot provider-smoke --provider codex
+scout-pilot menu
+```
+
+В меню пункт `0` открывает чат с агентом: сначала вводится URL сайта, затем браузер остается открытым, а в строку `Вы >` можно писать обычные задачи подряд. Enter на URL открывает `https://hh.ru`. Команды внутри режима: `/url` сменить сайт, `/report` показать последний replay/report, `/debug` включить подробный trace, `/exit` выйти и закрыть браузер. Codex запускается в ephemeral/read-only режиме и получает только provider-neutral сообщения, компактные semantic observations и tool schemas; браузерные действия по-прежнему выполняет Scout Pilot через Tool Runtime и Security Policy. Пункты `1`-`8` открывают готовые проверки, report/replay, persistent profile и provider smoke.
 
 `doctor` проверяет версию Python, импорт пакета, наличие Playwright, headless-запуск Chromium через Browser Engine, `.env`, Git ignore для browser profile и `reports/tmp`, а также состояние working tree. Отсутствие `.env` или грязный Git показываются как предупреждения, не как падение команды.
 

@@ -61,8 +61,13 @@ class CliTaskSettings:
             raise ValueError("task cannot be empty")
         if self.dashboard not in {"compact", "verbose", "off"}:
             raise ValueError("dashboard must be 'compact', 'verbose' or 'off'")
-        if self.provider is not None and self.provider not in {"openai", "anthropic", "mock"}:
-            raise ValueError("provider must be 'openai', 'anthropic' or 'mock'")
+        if self.provider is not None and self.provider not in {
+            "openai",
+            "anthropic",
+            "codex",
+            "mock",
+        }:
+            raise ValueError("provider must be 'openai', 'anthropic', 'codex' or 'mock'")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
         if self.slow_mo_ms is not None and self.slow_mo_ms < 0:
@@ -486,11 +491,11 @@ def _create_provider(
             return DeterministicLocalDemoMockProvider()
         return DeterministicBrowserMockProvider()
     provider = LlmProviderName(normalized)
-    api_key = (
-        config.provider_secrets.openai_api_key
-        if provider is LlmProviderName.OPENAI
-        else config.provider_secrets.anthropic_api_key
-    )
+    api_key = None
+    if provider is LlmProviderName.OPENAI:
+        api_key = config.provider_secrets.openai_api_key
+    elif provider is LlmProviderName.ANTHROPIC:
+        api_key = config.provider_secrets.anthropic_api_key
     return create_llm_provider(
         LlmProviderConfig(
             provider=provider,

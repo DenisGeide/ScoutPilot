@@ -26,7 +26,7 @@ def test_menu_command_parses_launcher_defaults():
     args = parser.parse_args(["menu"])
 
     assert args.command == "menu"
-    assert args.provider == "mock"
+    assert args.provider == "codex"
     assert args.dashboard == "off"
     assert args.max_iterations == 8
     assert args.headless is False
@@ -63,7 +63,7 @@ def test_menu_chat_mode_collects_url_without_starting_real_browser(monkeypatch, 
 
     assert exit_code == 0
     assert "Чат с агентом" in captured.out
-    assert calls == [("https://hh.ru", "mock")]
+    assert calls == [("https://hh.ru", "codex")]
 
 
 def test_menu_url_normalization_accepts_plain_domain():

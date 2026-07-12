@@ -34,8 +34,8 @@ class ProviderSmokeSettings:
     env_file: Path | None = Path(".env")
 
     def __post_init__(self) -> None:
-        if self.provider not in {"openai", "anthropic"}:
-            raise ValueError("provider must be 'openai' or 'anthropic'")
+        if self.provider not in {"openai", "anthropic", "codex"}:
+            raise ValueError("provider must be 'openai', 'anthropic' or 'codex'")
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ async def run_provider_smoke(
     config = AppConfig.load(env_file=settings.env_file)
     provider_name = LlmProviderName(settings.provider)
     api_key = _api_key_for_provider(config, provider_name)
-    if not api_key:
+    if provider_name is not LlmProviderName.CODEX and not api_key:
         return ProviderSmokeResult(
             success=False,
             exit_code=1,

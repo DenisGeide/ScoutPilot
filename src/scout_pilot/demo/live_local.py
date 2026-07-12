@@ -39,8 +39,8 @@ class LiveLocalDemoSettings:
     def __post_init__(self) -> None:
         if not self.task.strip():
             raise ValueError("task cannot be empty")
-        if self.provider not in {"mock", "openai", "anthropic"}:
-            raise ValueError("provider must be 'mock', 'openai' or 'anthropic'")
+        if self.provider not in {"mock", "openai", "anthropic", "codex"}:
+            raise ValueError("provider must be 'mock', 'openai', 'anthropic' or 'codex'")
         if self.dashboard not in {"compact", "verbose", "off"}:
             raise ValueError("dashboard must be 'compact', 'verbose' or 'off'")
         if self.max_iterations <= 0:

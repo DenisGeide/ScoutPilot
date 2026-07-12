@@ -63,6 +63,26 @@ def test_provider_smoke_sends_tiny_provider_neutral_request(tmp_path, monkeypatc
     assert "unit-test-key" not in serialized_messages
 
 
+def test_provider_smoke_supports_authenticated_codex_cli_without_api_key(tmp_path):
+    fake_provider = FakeProvider(
+        LlmProviderResult(
+            success=True,
+            response=LlmProviderResponse(content="Codex CLI доступен."),
+        )
+    )
+
+    result = asyncio.run(
+        run_provider_smoke(
+            ProviderSmokeSettings(provider="codex", env_file=tmp_path / ".env"),
+            provider_factory=lambda _config: fake_provider,
+        )
+    )
+
+    assert result.success is True
+    assert result.exit_code == 0
+    assert fake_provider.requests
+
+
 def test_provider_smoke_classifies_common_provider_failures(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     env_file = tmp_path / ".env"

@@ -10,7 +10,7 @@ Scout Pilot устроен как набор независимых слоев. 
 | Semantic Observation Engine | `scout_pilot.observation` | Преобразует контролируемый Browser Engine snapshot в компактное семантическое наблюдение без полного HTML и значений чувствительных полей. |
 | Universal Semantic Navigation | `scout_pilot.navigation` | Разрешает website-neutral navigation intents по semantic observation IDs, выбирает ссылки/кнопки/поля по roles, names и visible context, обнаруживает search fields, строит form-fill plan и помогает восстановиться после stale IDs. |
 | Tool Runtime | `scout_pilot.tools` | Регистрирует, валидирует и выполняет инструменты через схемы без привязки к провайдеру, ведет history и structured logs. |
-| LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic за единым интерфейсом, содержит provider-specific tool schema adapters и Reasoning Engine. |
+| LLM Provider Layer | `scout_pilot.llm` | Изолирует OpenAI и Anthropic SDK, а также локальный Codex CLI adapter за единым интерфейсом; содержит provider-specific tool schema adapters и Reasoning Engine. |
 | Planning Engine | `scout_pilot.planning` | Строит и обновляет короткий provider-neutral план по user goal, semantic observation, memory summaries и available tool schemas, не исполняя tools. |
 | Hierarchical Memory | `scout_pilot.memory` | Хранит ограниченную working, task и episodic memory, фильтрует приватные данные и отдает compact summaries для planner/reasoning/context. |
 | Autonomous Agent Runtime | `scout_pilot.runtime` | Координирует observe-think-plan-act-evaluate loop, state machine, memory, tool execution, progress, cancellation и explicit termination. |
