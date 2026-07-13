@@ -24,7 +24,12 @@ from scout_pilot.intelligence.types import (
     StepOutcome,
 )
 from scout_pilot.llm.reasoning import ReasoningEngine
-from scout_pilot.llm.types import LlmProviderError, ReasoningContext, ReasoningStatus
+from scout_pilot.llm.types import (
+    LlmProviderError,
+    ReasoningContext,
+    ReasoningResult,
+    ReasoningStatus,
+)
 from scout_pilot.memory.store import MemoryStore
 from scout_pilot.models import (
     ExecutionPlan,
@@ -482,23 +487,20 @@ class AutonomousAgentRuntime:
                     return
 
                 if reasoning.status is ReasoningStatus.NEEDS_CONFIRMATION:
-                    result = await self._wait_for_confirmation(
+                    await self._remember_event(
                         task_id,
-                        task,
-                        progress,
-                        plan,
-                        reasoning.message,
+                        f"ungrounded_confirmation_{iteration}",
+                        (
+                            "Reasoning requested confirmation without a concrete tool request. "
+                            "Only Security Policy may pause an executable action."
+                        ),
                     )
-                    self.last_result = result
-                    yield self._event(
-                        "confirmation_required",
-                        RuntimeStatus.WAITING_FOR_CONFIRMATION,
-                        task_id=task_id,
-                        progress=progress,
-                        message_key="runtime.confirmation.required",
-                        details=_result_details(result),
+                    reasoning = ReasoningResult.failure(
+                        (
+                            "Reasoning requested confirmation without selecting a concrete tool. "
+                            "Select the tool so deterministic Security Policy can decide."
+                        )
                     )
-                    return
 
                 if reasoning.status is ReasoningStatus.NEEDS_OBSERVATION:
                     await self._remember_event(
@@ -793,30 +795,12 @@ class AutonomousAgentRuntime:
                     details=_evaluation_details(evaluation),
                 )
 
-                if evaluation.recommended_action is RecoveryAction.REQUEST_CONFIRMATION:
-                    result = await self._wait_for_confirmation(
-                        task_id,
-                        task,
-                        progress,
-                        plan,
-                        evaluation.reflection_summary or tool_result.message,
-                    )
-                    self.last_result = result
-                    yield self._event(
-                        "confirmation_required",
-                        RuntimeStatus.WAITING_FOR_CONFIRMATION,
-                        task_id=task_id,
-                        progress=progress,
-                        message_key="runtime.confirmation.required",
-                        details=_result_details(result),
-                    )
-                    return
-
                 if evaluation.outcome is StepOutcome.SUCCESS:
                     failure_count = 0
                 elif evaluation.outcome is StepOutcome.FAILURE or evaluation.recommended_action in {
                     RecoveryAction.RETRY,
                     RecoveryAction.REPLAN,
+                    RecoveryAction.REQUEST_CONFIRMATION,
                     RecoveryAction.STOP,
                 }:
                     failure_count += 1
@@ -876,6 +860,7 @@ class AutonomousAgentRuntime:
                 if evaluation.recommended_action in {
                     RecoveryAction.RETRY,
                     RecoveryAction.REPLAN,
+                    RecoveryAction.REQUEST_CONFIRMATION,
                 }:
                     plan, events = await self._handle_failure(
                         task=task,
@@ -1512,10 +1497,20 @@ class AutonomousAgentRuntime:
         task_id: str,
         result: ToolExecutionResult,
     ) -> None:
+        summary = f"Tool {result.tool_name} finished with {result.status.value}: {result.message}"
+        resolution = result.data.get("resolution")
+        if isinstance(resolution, Mapping):
+            selected = resolution.get("selected")
+            if isinstance(selected, Mapping):
+                name = str(selected.get("name") or "").strip()[:160]
+                target_url = str(selected.get("target_url") or "").strip()[:500]
+                parsed = urlparse(target_url)
+                if name and parsed.scheme in {"http", "https"} and parsed.netloc:
+                    summary = f"{summary} Resolved {name} to {target_url}."
         await self._remember_event(
             task_id,
             f"tool_{result.tool_name}_{result.finished_at.timestamp()}",
-            f"Tool {result.tool_name} finished with {result.status.value}: {result.message}",
+            summary,
         )
 
     async def _remember_event(self, task_id: str, key: str, event: str) -> None:

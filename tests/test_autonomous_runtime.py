@@ -757,18 +757,28 @@ def test_runtime_does_not_treat_background_loading_as_empty_when_content_is_usef
     assert _page_blocker_decision(observation) is None
 
 
-def test_runtime_waits_for_confirmation_when_reasoning_requests_it():
-    provider = MockLlmProvider([_text_result("NEED_CONFIRMATION: Submit form.")])
-    runtime = _runtime(provider, FakePlanningEngine(), FakeToolRuntime([]), HierarchicalMemory())
+def test_runtime_replans_ungrounded_reasoning_confirmation_without_pausing():
+    provider = MockLlmProvider(
+        [
+            _text_result("NEED_CONFIRMATION: Submit form."),
+            _text_result("No concrete action was selected, so nothing was submitted."),
+        ]
+    )
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        FakeToolRuntime([]),
+        HierarchicalMemory(),
+        settings=RuntimeSettings(max_iterations=3, max_failures=2),
+    )
 
     events = asyncio.run(_collect(runtime.run(UserTask("Submit the form"))))
 
     assert runtime.last_result is not None
-    assert runtime.last_result.status is RuntimeStatus.WAITING_FOR_CONFIRMATION
-    assert runtime.last_result.final_state is AgentState.WAITING_FOR_CONFIRMATION
-    assert events[-1].name == "confirmation_required"
-    assert "Нужно подтверждение пользователя" in events[-1].details["message_ru"]
-    assert "Submit form" not in events[-1].details["message_ru"]
+    assert runtime.last_result.status is RuntimeStatus.COMPLETED
+    assert runtime.last_result.final_state is AgentState.COMPLETED
+    assert all(event.name != "confirmation_required" for event in events)
+    assert any(event.name == "plan_revised" for event in events)
 
 
 def test_runtime_pauses_and_resumes_security_confirmation():

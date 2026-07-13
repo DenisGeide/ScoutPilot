@@ -530,6 +530,10 @@ def _score_candidate(
     elif role:
         score -= 20
 
+    if _is_stable_resource_link(candidate):
+        score += 30
+        reasons.append("stable_resource_link")
+
     if context_tokens:
         context_matches = context_tokens & text_tokens
         if context_matches:
@@ -545,6 +549,17 @@ def _score_candidate(
         reasons.append("search_input_type")
 
     return max(score, 0), tuple(reasons)
+
+
+def _is_stable_resource_link(candidate: SemanticCandidate) -> bool:
+    if candidate.role != "link" or not candidate.target_url:
+        return False
+    parsed = urlsplit(candidate.target_url.strip())
+    return (
+        parsed.scheme.casefold() in {"http", "https"}
+        and bool(parsed.netloc)
+        and _STABLE_RESOURCE_ID_PATTERN.search(parsed.path) is not None
+    )
 
 
 def _score_search_field(

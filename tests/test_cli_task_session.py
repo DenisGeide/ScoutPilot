@@ -341,6 +341,30 @@ def test_live_cli_interactive_confirmation_cancel_stops_cleanly(tmp_path, monkey
     assert any("Как отменить" in message for message in messages)
 
 
+def test_confirmation_eof_is_a_clean_safe_cancel(monkeypatch):
+    messages: list[str] = []
+    monkeypatch.setattr(
+        task_session,
+        "_read_confirmation_answer",
+        lambda _prompt: (_ for _ in ()).throw(EOFError()),
+    )
+
+    confirmed = task_session._ask_user_confirmation(
+        {
+            "confirmation_id": "confirm_test",
+            "tool_name": "browser.click_by_intent",
+            "risk": "external_side_effect",
+            "action": "нажать Apply",
+            "target": "Apply",
+            "sanitized_arguments": {"target": "Apply"},
+        },
+        messages.append,
+    )
+
+    assert confirmed is False
+    assert any("Ввод подтверждения недоступен" in message for message in messages)
+
+
 def test_dashboard_renders_required_status_fields():
     dashboard = RuntimeDashboard(task="Проверить страницу")
     dashboard.render_event(

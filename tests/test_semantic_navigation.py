@@ -111,6 +111,54 @@ def test_resolver_coalesces_duplicate_links_to_the_same_destination():
     assert resolution.selected.element_id == "el_title"
 
 
+def test_resolver_prefers_named_resource_link_over_collection_view():
+    location = ElementLocation("middle", x_ratio=0.4, y_ratio=0.5)
+    observation = PageObservation(
+        url="https://example.test/search",
+        title="Results",
+        summary="A result title is also rendered in a collection view.",
+        sections=[
+            SemanticSection(
+                "sec_results",
+                "section",
+                "Results",
+                "50 000 - 100 000 per month, Example Company",
+                location=location,
+            )
+        ],
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_collection",
+                role="link",
+                accessible_name="Data scientist",
+                visible_text="Data scientist",
+                target_url="https://example.test/search/map?item=data-scientist",
+                location=location,
+            ),
+            InteractiveElement(
+                element_id="el_detail",
+                role="link",
+                accessible_name="Data scientist",
+                visible_text="Data scientist",
+                target_url="https://example.test/items/135124449?source=search",
+                location=location,
+            ),
+        ],
+    )
+
+    resolution = SemanticNavigationResolver().resolve_click(
+        observation,
+        target="Data scientist",
+        role="link",
+        context="50 000 100 000 Example Company",
+    )
+
+    assert resolution.status is SemanticResolutionStatus.RESOLVED
+    assert resolution.selected is not None
+    assert resolution.selected.element_id == "el_detail"
+    assert "stable_resource_link" in resolution.selected.reasons
+
+
 def test_resolver_selects_contextual_read_only_link_when_titles_are_equal():
     location = ElementLocation("middle", x_ratio=0.4, y_ratio=0.5)
     observation = PageObservation(

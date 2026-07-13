@@ -722,7 +722,14 @@ def _ask_user_confirmation(
     sink: ProgressSink,
 ) -> bool:
     sink(_format_confirmation_notice(confirmation, interactive=True))
-    answer = _read_confirmation_answer("Подтвердить это действие один раз? [да/нет]: ")
+    try:
+        answer = _read_confirmation_answer("Подтвердить это действие один раз? [да/нет]: ")
+    except EOFError:
+        sink(
+            "Ввод подтверждения недоступен: действие не выполнено. "
+            "Запрос сохранен в безопасном отчете."
+        )
+        return False
     normalized = answer.strip().casefold()
     return normalized in {"y", "yes", "да", "д", "подтверждаю", "approve"}
 

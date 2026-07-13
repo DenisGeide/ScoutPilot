@@ -352,7 +352,7 @@ def _action_for_page_issues(observation: PageObservation | None) -> RecoveryActi
     ):
         return RecoveryAction.STOP
     if _has_issue(observation, PageIssueCode.REGION_PROMPT):
-        return RecoveryAction.REQUEST_CONFIRMATION
+        return RecoveryAction.REPLAN
     if _has_issue(observation, PageIssueCode.NAVIGATION_ERROR):
         return RecoveryAction.REPLAN
     return None
@@ -434,7 +434,11 @@ def _failure_signature(result: ToolExecutionResult) -> tuple[str, str, str] | No
 
 def _expects_page_change(tool_name: str) -> bool:
     return tool_name not in {
+        "browser.fill",
+        "browser.fill_by_label",
         "browser.observe",
+        "browser.plan_form_fill",
+        "browser.resolve_target",
         "browser.screenshot",
         "browser.wait",
     }

@@ -1276,9 +1276,11 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
   const issues = [];
   const loadState = doc.readyState || "unknown";
   const bodyText = normalizeText(body ? (body.innerText || body.textContent || "") : "");
+  const dialogText = normalizeText(dialogs.map((dialog) => `${dialog.title || ""} ${dialog.text || ""}`).join(" "));
   if (loadState !== "complete") issues.push("loading");
   if (!bodyText && interactiveElements.length === 0) issues.push("empty_page");
   const lowerBodyText = bodyText.toLowerCase();
+  const lowerDialogText = dialogText.toLowerCase();
   if (/(cookie|cookies|consent|privacy settings|accept all|reject all|файл(?:ы)? cookie|куки|согласие|конфиденциальност)/.test(lowerBodyText)) {
     issues.push("cookie_banner");
   }
@@ -1288,7 +1290,7 @@ _SEMANTIC_SNAPSHOT_SCRIPT = """
   if (/(captcha|recaptcha|hcaptcha|verify you are human|prove you are human|unusual traffic|robot|automated requests|проверьте,? что вы человек|проверка,? что вы человек|капч|робот|автоматическ(?:ие|их) запрос)/.test(lowerBodyText)) {
     issues.push("captcha_blocking_page");
   }
-  if (/(select (?:your )?(?:region|location|city|country)|choose (?:your )?(?:region|location|city|country)|allow location|use your location|geolocation|выберите (?:регион|город|страну|локацию)|определить (?:местоположение|город)|разрешить доступ к местоположению)/.test(lowerBodyText)) {
+  if (dialogs.length > 0 && /(select (?:your )?(?:region|location|city|country)|choose (?:your )?(?:region|location|city|country)|allow location|use your location|geolocation|выберите (?:регион|город|страну|локацию)|определить (?:местоположение|город)|разрешить доступ к местоположению)/.test(lowerDialogText)) {
     issues.push("region_prompt");
   }
   if (/(access denied|forbidden|blocked|verify you are human|enable javascript|доступ запрещен|доступ ограничен|заблокировано|включите javascript)/.test(lowerBodyText)) {

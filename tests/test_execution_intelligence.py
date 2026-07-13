@@ -164,6 +164,68 @@ def test_evaluator_replans_instead_of_stopping_on_ambiguous_semantic_target():
     assert "exact discovered target URL" in " ".join(evaluation.alternative_actions)
 
 
+def test_evaluator_accepts_successful_nonmutating_semantic_resolution():
+    evaluator = DeterministicExecutionEvaluator()
+    observation = _observation("Results", "Matching link is visible")
+    plan = _plan(tool_name="browser.resolve_target")
+
+    evaluation = asyncio.run(
+        evaluator.evaluate_step(
+            StepEvaluationContext(
+                plan=plan,
+                step=plan.steps[0],
+                tool_request=ToolRequest(
+                    "browser.resolve_target",
+                    {"kind": "click", "target": "Data scientist", "role": "link"},
+                ),
+                tool_result=_tool_result(
+                    tool_name="browser.resolve_target",
+                    success=True,
+                ),
+                before_observation=observation,
+                after_observation=observation,
+            )
+        )
+    )
+
+    assert evaluation.outcome is StepOutcome.SUCCESS
+    assert evaluation.recommended_action is RecoveryAction.CONTINUE
+    assert evaluation.moved_forward is True
+
+
+def test_evaluator_replans_region_prompt_without_requesting_confirmation():
+    evaluator = DeterministicExecutionEvaluator()
+    plan = _plan(tool_name="browser.click_by_intent")
+    region_prompt = _observation(
+        "Region",
+        "Choose a region",
+        issues=(PageIssue(PageIssueCode.REGION_PROMPT, "Region choice is visible."),),
+    )
+
+    evaluation = asyncio.run(
+        evaluator.evaluate_step(
+            StepEvaluationContext(
+                plan=plan,
+                step=plan.steps[0],
+                tool_request=ToolRequest(
+                    "browser.click_by_intent",
+                    {"target": "Data scientist", "role": "link"},
+                ),
+                tool_result=_tool_result(
+                    tool_name="browser.click_by_intent",
+                    success=True,
+                ),
+                before_observation=_observation("Results", "Vacancy list"),
+                after_observation=region_prompt,
+            )
+        )
+    )
+
+    assert evaluation.outcome is StepOutcome.FAILURE
+    assert evaluation.recommended_action is RecoveryAction.REPLAN
+    assert evaluation.confirmation_required is False
+
+
 def test_evaluator_detects_page_issues_and_invalid_plans():
     evaluator = DeterministicExecutionEvaluator()
     invalid_plan = ExecutionPlan(

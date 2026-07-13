@@ -210,8 +210,9 @@ def test_malformed_provider_response_returns_fallback_plan():
     )
 
     assert plan.is_fallback is True
-    assert plan.validation_errors
-    assert "could not be parsed" in plan.validation_errors[0]
+    assert plan.validation_errors == ()
+    assert plan.steps[0].tool_name == "browser.observe"
+    assert "could not be parsed" in plan.warnings[0]
 
 
 def test_planner_request_uses_budgeted_context_for_oversized_inputs():

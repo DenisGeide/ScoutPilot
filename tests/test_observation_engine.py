@@ -207,7 +207,7 @@ def test_observation_classifies_common_blockers_without_raw_html(tmp_path):
       </form>
     </main>
     <dialog open aria-label="Information modal">
-      <p>Modal dialog text.</p>
+      <p>Modal dialog text. Select your region or city to continue.</p>
     </dialog>
     """
 
@@ -224,6 +224,22 @@ def test_observation_classifies_common_blockers_without_raw_html(tmp_path):
     assert "<dialog" not in serialized
     assert "<button" not in serialized
     assert "private-password" not in serialized
+
+
+def test_non_blocking_location_control_is_not_a_region_prompt(tmp_path):
+    html = """
+    <!doctype html>
+    <title>Results with map</title>
+    <main>
+      <h1>Search results</h1>
+      <button>Use your location</button>
+      <article><a href="/items/1001">AI Engineer</a></article>
+    </main>
+    """
+
+    observation = _observe_html(tmp_path, html)
+
+    assert PageIssueCode.REGION_PROMPT not in {issue.code for issue in observation.issues}
 
 
 def test_loading_snapshot_reports_loading_issue():

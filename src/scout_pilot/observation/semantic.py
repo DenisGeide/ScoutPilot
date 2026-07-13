@@ -550,6 +550,9 @@ def _issue_from_browser_code(code: str) -> PageIssue | None:
 
 def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
     text = _snapshot_visible_text(snapshot)
+    dialog_text = " ".join(
+        f"{dialog.title or ''} {dialog.text}" for dialog in snapshot.dialogs
+    )
     issues: list[PageIssue] = []
     if snapshot.dialogs:
         issues.append(
@@ -583,7 +586,7 @@ def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
                 severity="warning",
             )
         )
-    if _REGION_PATTERN.search(text):
+    if snapshot.dialogs and _REGION_PATTERN.search(dialog_text):
         issues.append(
             PageIssue(
                 PageIssueCode.REGION_PROMPT,

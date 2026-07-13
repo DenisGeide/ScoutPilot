@@ -127,7 +127,6 @@ class ProviderPlanningEngine:
                 observation=budgeted.observation,
                 memory_summaries=budgeted.memory_summaries,
                 message=_provider_failure_message(result.error),
-                validation_errors=(_provider_failure_message(result.error),),
                 source="fallback",
                 available_tools=available_tools,
             )
@@ -147,7 +146,6 @@ class ProviderPlanningEngine:
                 observation=budgeted.observation,
                 memory_summaries=budgeted.memory_summaries,
                 message=f"Planner response could not be parsed: {exc}",
-                validation_errors=(f"Planner response could not be parsed: {exc}",),
                 source="fallback",
                 available_tools=available_tools,
             )
@@ -196,7 +194,6 @@ class ProviderPlanningEngine:
                 observation=budgeted.observation,
                 memory_summaries=budgeted.memory_summaries,
                 message=_provider_failure_message(result.error),
-                validation_errors=(_provider_failure_message(result.error),),
                 source="fallback",
                 available_tools=available_tools,
                 completed_steps=completed_steps,
@@ -220,7 +217,6 @@ class ProviderPlanningEngine:
                 observation=budgeted.observation,
                 memory_summaries=budgeted.memory_summaries,
                 message=f"Planner response could not be parsed: {exc}",
-                validation_errors=(f"Planner response could not be parsed: {exc}",),
                 source="fallback",
                 available_tools=available_tools,
                 completed_steps=completed_steps,
