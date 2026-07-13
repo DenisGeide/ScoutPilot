@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 from scout_pilot.models import (
     ElementLocation,
@@ -373,7 +374,11 @@ def _resolution_from_scored(
             message=not_found_message,
         )
 
-    ordered = tuple(sorted(scored, key=lambda item: item.score, reverse=True))
+    ordered = tuple(
+        _coalesce_equivalent_link_destinations(
+            sorted(scored, key=lambda item: item.score, reverse=True)
+        )
+    )
     best = ordered[0]
     if len(ordered) > 1 and best.score - ordered[1].score < ambiguity_margin:
         return SemanticResolution(
@@ -389,6 +394,41 @@ def _resolution_from_scored(
         candidates=ordered[:5],
         message="Semantic target resolved.",
     )
+
+
+def _coalesce_equivalent_link_destinations(
+    candidates: Sequence[SemanticCandidate],
+) -> tuple[SemanticCandidate, ...]:
+    """Treat duplicate rendered links to the same destination as one target."""
+
+    unique: list[SemanticCandidate] = []
+    seen_destinations: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        destination = _link_destination_identity(candidate)
+        if destination is not None:
+            if destination in seen_destinations:
+                continue
+            seen_destinations.add(destination)
+        unique.append(candidate)
+    return tuple(unique)
+
+
+def _link_destination_identity(candidate: SemanticCandidate) -> tuple[str, str] | None:
+    if candidate.role != "link" or not candidate.target_url:
+        return None
+    parsed = urlsplit(candidate.target_url.strip())
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+        return None
+    destination = urlunsplit(
+        (
+            parsed.scheme.casefold(),
+            parsed.netloc.casefold(),
+            parsed.path or "/",
+            parsed.query,
+            "",
+        )
+    )
+    return candidate.role, destination
 
 
 def _score_candidates(

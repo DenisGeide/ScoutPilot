@@ -286,6 +286,43 @@ def test_runtime_blocks_reopening_the_same_observed_target_url():
     assert blocked.details["target_url"] == target_url
 
 
+def test_runtime_tracks_urls_opened_through_semantic_click_intent():
+    target_url = "https://example.test/vacancies/first"
+    request = ToolRequest(
+        name="browser.click_by_intent",
+        arguments={"target": "First vacancy", "role": "link"},
+    )
+    provider = MockLlmProvider(
+        [
+            _tool_call_result(request.name, request.arguments),
+            _tool_call_result(request.name, request.arguments),
+            _text_result("Compared distinct vacancies."),
+        ]
+    )
+    tool_runtime = FakeToolRuntime(
+        [_tool_result("browser.click_by_intent", success=True)]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=RepeatedLinkObservationEngine(target_url),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(request),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_click_by_intent_schema()],
+        settings=RuntimeSettings(max_iterations=4, max_failures=2),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Compare different vacancies"))))
+    second_reasoning_payload = json.loads(provider.requests[1].messages[1].content)
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [request]
+    assert second_reasoning_payload["visited_target_urls"] == [target_url]
+    blocked = next(event for event in events if event.name == "repeated_target_blocked")
+    assert blocked.details["target_url"] == target_url
+
+
 def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():
     first_url = "https://example.test/items/1001?source=results"
     second_url = "https://example.test/items/1002?source=results"
@@ -896,6 +933,31 @@ def _browser_click_schema() -> ToolSchema:
                     "element_id",
                     ToolValueType.STRING,
                     "Semantic element identifier.",
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
+def _browser_click_by_intent_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.click_by_intent",
+        description="Click a link by semantic intent.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema("target", ToolValueType.STRING, "Semantic target."),
+                ToolFieldSchema(
+                    "role",
+                    ToolValueType.STRING,
+                    "Optional semantic role.",
+                    required=False,
+                ),
+                ToolFieldSchema(
+                    "context",
+                    ToolValueType.STRING,
+                    "Optional visible context.",
+                    required=False,
                 ),
             )
         ),

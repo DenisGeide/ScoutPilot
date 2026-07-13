@@ -76,6 +76,41 @@ def test_resolver_reports_ambiguous_click_targets_without_guessing():
     ]
 
 
+def test_resolver_coalesces_duplicate_links_to_the_same_destination():
+    target_url = "https://example.test/items/1001?source=results"
+    observation = PageObservation(
+        url="https://example.test/results",
+        title="Results",
+        summary="The same destination is rendered twice.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_title",
+                role="link",
+                accessible_name="Lead AI Engineer",
+                visible_text="Lead AI Engineer",
+                target_url=target_url,
+            ),
+            InteractiveElement(
+                element_id="el_card",
+                role="link",
+                accessible_name="Lead AI Engineer",
+                visible_text="Lead AI Engineer",
+                target_url=f"{target_url}#description",
+            ),
+        ],
+    )
+
+    resolution = SemanticNavigationResolver().resolve_click(
+        observation,
+        target="Lead AI Engineer",
+        role="link",
+    )
+
+    assert resolution.status is SemanticResolutionStatus.RESOLVED
+    assert resolution.selected is not None
+    assert resolution.selected.element_id == "el_title"
+
+
 def test_resolver_uses_section_context_and_location_to_disambiguate_buttons():
     top = ElementLocation("top", x_ratio=0.2, y_ratio=0.2)
     bottom = ElementLocation("bottom", x_ratio=0.2, y_ratio=0.8)

@@ -15,7 +15,7 @@ from scout_pilot.models import (
     PageObservation,
     ToolRequest,
 )
-from scout_pilot.navigation import SemanticNavigationResolver
+from scout_pilot.navigation import SemanticCandidate, SemanticNavigationResolver
 
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -592,6 +592,39 @@ def _classify_click_intent(
                 action=f"нажать «{candidate.name or target}»",
             )
         if resolution.status.value == "ambiguous":
+            candidates = resolution.candidates
+            if candidates and all(_is_ordinary_navigation_link(item) for item in candidates):
+                candidate_text = _normalize(
+                    " ".join(
+                        value
+                        for candidate in candidates
+                        for value in (
+                            candidate.role,
+                            candidate.name,
+                            candidate.visible_text,
+                            candidate.context,
+                            candidate.target_url,
+                        )
+                        if value
+                    )
+                )
+                classification = _classification_from_action_text(
+                    candidate_text,
+                    action=f"выбрать и открыть ссылку «{target}»",
+                )
+                if classification.risk is not ActionRisk.SAFE:
+                    return classification
+                return ActionClassification(
+                    risk=ActionRisk.SAFE,
+                    action=f"выбрать и открыть ссылку «{target}»",
+                    expected_consequence=(
+                        "Все найденные кандидаты являются обычными web-ссылками; "
+                        "навигационный слой не выполнит клик, пока не выбран "
+                        "один семантический адресат."
+                    ),
+                    matched_terms=("ambiguous_navigation_links",),
+                    uncertain=True,
+                )
             return ActionClassification(
                 risk=ActionRisk.EXTERNAL_SIDE_EFFECT,
                 action=f"нажать «{target}»",
@@ -604,6 +637,13 @@ def _classify_click_intent(
 
     text = _classification_text(request, context)
     return _classification_from_action_text(text, action=f"нажать «{target}»")
+
+
+def _is_ordinary_navigation_link(candidate: SemanticCandidate) -> bool:
+    if candidate.role != "link" or not candidate.target_url:
+        return False
+    target_url = candidate.target_url.strip().casefold()
+    return target_url.startswith(("http://", "https://"))
 
 
 def _classification_from_action_text(text: str, *, action: str) -> ActionClassification:

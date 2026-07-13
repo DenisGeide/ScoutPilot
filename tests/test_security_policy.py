@@ -227,6 +227,81 @@ def test_policy_resolves_click_intent_before_classification():
     assert "search" in decision.classification.matched_terms
 
 
+def test_policy_does_not_request_confirmation_for_ambiguous_read_only_links():
+    policy = DeterministicSecurityPolicy()
+    observation = PageObservation(
+        url="https://example.test/jobs",
+        title="Jobs",
+        summary="Two employers use the same vacancy title.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_first",
+                role="link",
+                accessible_name="Lead AI Engineer",
+                visible_text="Lead AI Engineer",
+                target_url="https://example.test/vacancies/1001",
+            ),
+            InteractiveElement(
+                element_id="el_second",
+                role="link",
+                accessible_name="Lead AI Engineer",
+                visible_text="Lead AI Engineer",
+                target_url="https://example.test/vacancies/1002",
+            ),
+        ],
+    )
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.click_by_intent",
+            arguments={"target": "Lead AI Engineer", "role": "link"},
+        ),
+        SecurityEvaluationContext(observation=observation),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk is ActionRisk.SAFE
+    assert decision.requires_confirmation is False
+    assert decision.classification.matched_terms == ("ambiguous_navigation_links",)
+
+
+def test_policy_still_requires_confirmation_for_ambiguous_apply_links():
+    policy = DeterministicSecurityPolicy()
+    observation = PageObservation(
+        url="https://example.test/jobs",
+        title="Jobs",
+        summary="Two apply links are visible.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_first",
+                role="link",
+                accessible_name="Apply to vacancy",
+                visible_text="Apply to vacancy",
+                target_url="https://example.test/apply/1001",
+            ),
+            InteractiveElement(
+                element_id="el_second",
+                role="link",
+                accessible_name="Apply to vacancy",
+                visible_text="Apply to vacancy",
+                target_url="https://example.test/apply/1002",
+            ),
+        ],
+    )
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.click_by_intent",
+            arguments={"target": "Apply to vacancy", "role": "link"},
+        ),
+        SecurityEvaluationContext(observation=observation),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk is ActionRisk.EXTERNAL_SIDE_EFFECT
+    assert decision.requires_confirmation is True
+
+
 @pytest.mark.parametrize(
     "label",
     ["Search", "Submit search", "Apply filters", "Показать вакансии"],

@@ -41,6 +41,7 @@ from scout_pilot.models import (
     ToolRequest,
     UserTask,
 )
+from scout_pilot.navigation import SemanticNavigationResolver
 from scout_pilot.observation.engine import ObservationEngine
 from scout_pilot.planning.engine import PlanningEngine
 from scout_pilot.runtime.types import (
@@ -1810,7 +1811,25 @@ def _target_url_for_tool(
     if request.name == "browser.navigate":
         value = request.arguments.get("url")
         return value.strip() if isinstance(value, str) and value.strip() else None
-    if observation is None or request.name != "browser.click":
+    if observation is None:
+        return None
+
+    if request.name == "browser.click_by_intent":
+        target = request.arguments.get("target")
+        if not isinstance(target, str) or not target.strip():
+            return None
+        resolution = SemanticNavigationResolver().resolve_click(
+            observation,
+            target=target,
+            role=_optional_tool_argument(request, "role"),
+            context=_optional_tool_argument(request, "context"),
+        )
+        if not resolution.is_resolved or resolution.selected is None:
+            return None
+        target_url = (resolution.selected.target_url or "").strip()
+        return target_url or None
+
+    if request.name != "browser.click":
         return None
 
     element_id = request.arguments.get("element_id")
@@ -1827,6 +1846,14 @@ def _target_url_for_tool(
     if element is None or not element.target_url:
         return None
     return element.target_url.strip() or None
+
+
+def _optional_tool_argument(request: ToolRequest, name: str) -> str | None:
+    value = request.arguments.get(name)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def _observation_with_visited_targets_last(
