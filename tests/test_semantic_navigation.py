@@ -95,7 +95,7 @@ def test_resolver_coalesces_duplicate_links_to_the_same_destination():
                 role="link",
                 accessible_name="Lead AI Engineer",
                 visible_text="Lead AI Engineer",
-                target_url=f"{target_url}#description",
+                target_url="https://example.test/items/1001?from=card#description",
             ),
         ],
     )
@@ -109,6 +109,54 @@ def test_resolver_coalesces_duplicate_links_to_the_same_destination():
     assert resolution.status is SemanticResolutionStatus.RESOLVED
     assert resolution.selected is not None
     assert resolution.selected.element_id == "el_title"
+
+
+def test_resolver_selects_contextual_read_only_link_when_titles_are_equal():
+    location = ElementLocation("middle", x_ratio=0.4, y_ratio=0.5)
+    observation = PageObservation(
+        url="https://example.test/results",
+        title="Results",
+        summary="Two read-only links share a title.",
+        sections=[
+            SemanticSection(
+                "sec_results",
+                "section",
+                "Vacancies",
+                "270 000 per month, Example Rail Company",
+                location=location,
+            )
+        ],
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_first",
+                role="link",
+                accessible_name="Artificial Intelligence Engineer",
+                visible_text="Artificial Intelligence Engineer",
+                target_url="https://example.test/items/1001",
+                location=location,
+            ),
+            InteractiveElement(
+                element_id="el_second",
+                role="link",
+                accessible_name="Artificial Intelligence Engineer",
+                visible_text="Artificial Intelligence Engineer",
+                target_url="https://example.test/items/1002",
+                location=location,
+            ),
+        ],
+    )
+
+    resolution = SemanticNavigationResolver().resolve_click(
+        observation,
+        target="Artificial Intelligence Engineer",
+        role="link",
+        context="270 000 Example Rail Company",
+    )
+
+    assert resolution.status is SemanticResolutionStatus.RESOLVED
+    assert resolution.selected is not None
+    assert resolution.selected.element_id == "el_first"
+    assert resolution.message.startswith("Contextual read-only")
 
 
 def test_resolver_uses_section_context_and_location_to_disambiguate_buttons():

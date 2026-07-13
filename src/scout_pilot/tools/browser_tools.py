@@ -39,6 +39,7 @@ RETRYABLE_BROWSER_CODES = {
     "wait_error",
     "press_key_error",
     "semantic_target_not_found",
+    "semantic_target_ambiguous",
     "semantic_element_stale",
     "browser_closed",
 }
@@ -49,7 +50,6 @@ NON_RETRYABLE_BROWSER_CODES = {
     "invalid_wait_duration",
     "invalid_field_value",
     "element_not_fillable",
-    "semantic_target_ambiguous",
     "semantic_resolution_invalid",
 }
 
@@ -778,7 +778,8 @@ def _resolution_failure(resolution: SemanticResolution) -> ToolExecutionOutcome:
         message=resolution.message,
         data={"resolution": resolution.to_dict()},
         failure_kind=ToolFailureKind.BROWSER,
-        retryable=resolution.status is SemanticResolutionStatus.NOT_FOUND,
+        retryable=resolution.status
+        in {SemanticResolutionStatus.NOT_FOUND, SemanticResolutionStatus.AMBIGUOUS},
         error_code=error_code,
     )
 

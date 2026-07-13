@@ -27,6 +27,11 @@ from scout_pilot.navigation.types import (
 
 
 _WORD_PATTERN = re.compile(r"[a-z0-9а-яё]+", re.IGNORECASE)
+_STABLE_RESOURCE_ID_PATTERN = re.compile(
+    r"(?:\d{3,}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
 _SEARCH_TERMS = frozenset(
     {
         "search",
@@ -381,6 +386,19 @@ def _resolution_from_scored(
     )
     best = ordered[0]
     if len(ordered) > 1 and best.score - ordered[1].score < ambiguity_margin:
+        contenders = tuple(
+            candidate
+            for candidate in ordered
+            if best.score - candidate.score < ambiguity_margin
+        )
+        if _can_select_contextual_read_only_link(intent, contenders):
+            return SemanticResolution(
+                status=SemanticResolutionStatus.RESOLVED,
+                intent=intent,
+                selected=best,
+                candidates=ordered[:5],
+                message="Contextual read-only link target resolved deterministically.",
+            )
         return SemanticResolution(
             status=SemanticResolutionStatus.AMBIGUOUS,
             intent=intent,
@@ -419,16 +437,42 @@ def _link_destination_identity(candidate: SemanticCandidate) -> tuple[str, str] 
     parsed = urlsplit(candidate.target_url.strip())
     if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
         return None
+    query = "" if _STABLE_RESOURCE_ID_PATTERN.search(parsed.path) else parsed.query
     destination = urlunsplit(
         (
             parsed.scheme.casefold(),
             parsed.netloc.casefold(),
             parsed.path or "/",
-            parsed.query,
+            query,
             "",
         )
     )
     return candidate.role, destination
+
+
+def _can_select_contextual_read_only_link(
+    intent: NavigationIntent,
+    contenders: Sequence[SemanticCandidate],
+) -> bool:
+    if intent.role != "link" or len(_tokens(intent.context or "")) < 2:
+        return False
+    if not contenders:
+        return False
+    if not all(_is_public_link_candidate(candidate) for candidate in contenders):
+        return False
+    best = contenders[0]
+    target_matched = {
+        "exact_name_match",
+        "all_target_terms_match",
+    }.intersection(best.reasons)
+    return bool(target_matched and "context_terms_match" in best.reasons)
+
+
+def _is_public_link_candidate(candidate: SemanticCandidate) -> bool:
+    if candidate.role != "link" or not candidate.target_url:
+        return False
+    parsed = urlsplit(candidate.target_url.strip())
+    return parsed.scheme.casefold() in {"http", "https"} and bool(parsed.netloc)
 
 
 def _score_candidates(

@@ -38,6 +38,7 @@ from scout_pilot.runtime.agent import (
     _requested_distinct_resource_count,
     _resource_observation_has_evidence,
     _resource_observation_summaries,
+    _target_url_for_tool,
 )
 from scout_pilot.observation import SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
@@ -321,6 +322,36 @@ def test_runtime_tracks_urls_opened_through_semantic_click_intent():
     assert second_reasoning_payload["visited_target_urls"] == [target_url]
     blocked = next(event for event in events if event.name == "repeated_target_blocked")
     assert blocked.details["target_url"] == target_url
+
+
+def test_runtime_infers_link_url_for_semantic_button_with_the_same_target():
+    target_url = "https://example.test/vacancies/1001?source=results"
+    observation = PageObservation(
+        url="https://example.test/results",
+        title="Results",
+        summary="A card exposes both a button and a link.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_button",
+                role="button",
+                accessible_name="AI Engineer",
+                visible_text="AI Engineer",
+            ),
+            InteractiveElement(
+                element_id="el_link",
+                role="link",
+                accessible_name="AI Engineer",
+                visible_text="AI Engineer",
+                target_url=target_url,
+            ),
+        ],
+    )
+    request = ToolRequest(
+        name="browser.click_by_intent",
+        arguments={"target": "AI Engineer", "role": "button"},
+    )
+
+    assert _target_url_for_tool(observation, request) == target_url
 
 
 def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():

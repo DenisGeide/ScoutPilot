@@ -1818,15 +1818,27 @@ def _target_url_for_tool(
         target = request.arguments.get("target")
         if not isinstance(target, str) or not target.strip():
             return None
-        resolution = SemanticNavigationResolver().resolve_click(
+        resolver = SemanticNavigationResolver()
+        requested_role = _optional_tool_argument(request, "role")
+        context = _optional_tool_argument(request, "context")
+        resolution = resolver.resolve_click(
             observation,
             target=target,
-            role=_optional_tool_argument(request, "role"),
-            context=_optional_tool_argument(request, "context"),
+            role=requested_role,
+            context=context,
         )
         if not resolution.is_resolved or resolution.selected is None:
             return None
         target_url = (resolution.selected.target_url or "").strip()
+        if not target_url and requested_role != "link":
+            linked_target = resolver.resolve_click(
+                observation,
+                target=target,
+                role="link",
+                context=context,
+            )
+            if linked_target.is_resolved and linked_target.selected is not None:
+                target_url = (linked_target.selected.target_url or "").strip()
         return target_url or None
 
     if request.name != "browser.click":

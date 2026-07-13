@@ -302,9 +302,17 @@ def _failure_decision(
             ("Wait for Security Policy or user confirmation before continuing.",),
         )
 
-    if error_code == "semantic_element_not_found":
-        reasons.append("The semantic element disappeared or is no longer valid.")
-        alternatives.append("Re-observe the page and select an element from the latest semantic IDs.")
+    if error_code in {"semantic_element_not_found", "semantic_target_ambiguous"}:
+        if error_code == "semantic_target_ambiguous":
+            reasons.append("More than one semantic element matched the read-only intent.")
+            alternatives.append(
+                "Replan with visible context or use an exact discovered target URL."
+            )
+        else:
+            reasons.append("The semantic element disappeared or is no longer valid.")
+            alternatives.append(
+                "Re-observe the page and select an element from the latest semantic IDs."
+            )
         return StepOutcome.FAILURE, RecoveryAction.REPLAN, tuple(reasons), tuple(alternatives)
 
     if error_code in {"invalid_url", "invalid_key", "invalid_wait_duration", "invalid_field_value"}:

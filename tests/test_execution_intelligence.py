@@ -134,6 +134,36 @@ def test_evaluator_replans_when_semantic_element_disappears():
     assert evaluation.alternative_actions
 
 
+def test_evaluator_replans_instead_of_stopping_on_ambiguous_semantic_target():
+    evaluator = DeterministicExecutionEvaluator()
+
+    evaluation = asyncio.run(
+        evaluator.evaluate_step(
+            StepEvaluationContext(
+                plan=_plan(tool_name="browser.click_by_intent"),
+                step=_plan(tool_name="browser.click_by_intent").steps[0],
+                tool_request=ToolRequest(
+                    "browser.click_by_intent",
+                    {"target": "AI Engineer", "role": "link"},
+                ),
+                tool_result=_tool_result(
+                    tool_name="browser.click_by_intent",
+                    success=False,
+                    retryable=True,
+                    failure_kind=ToolFailureKind.BROWSER,
+                    error_code="semantic_target_ambiguous",
+                ),
+                before_observation=_observation("Results", "Two matching links"),
+                after_observation=_observation("Results", "Two matching links"),
+            )
+        )
+    )
+
+    assert evaluation.outcome is StepOutcome.FAILURE
+    assert evaluation.recommended_action is RecoveryAction.REPLAN
+    assert "exact discovered target URL" in " ".join(evaluation.alternative_actions)
+
+
 def test_evaluator_detects_page_issues_and_invalid_plans():
     evaluator = DeterministicExecutionEvaluator()
     invalid_plan = ExecutionPlan(
