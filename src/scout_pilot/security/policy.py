@@ -117,10 +117,14 @@ _DESTRUCTIVE_TERMS = (
     "wipe",
     "discard",
     "revoke",
-    "удал",
-    "корзин",
-    "спам",
-    "отпис",
+    "удалить",
+    "удаление",
+    "удалите",
+    "переместить в корзину",
+    "переместить в спам",
+    "пометить как спам",
+    "отписаться",
+    "отписка",
     "отменить аккаунт",
     "стереть",
 )
@@ -297,9 +301,7 @@ class DeterministicSecurityPolicy:
 
         blocked = _is_blocked_navigation(sanitized_request)
         requires_confirmation = (
-            not blocked
-            and classification.risk is not ActionRisk.SAFE
-            and not context.is_confirmed
+            not blocked and classification.risk is not ActionRisk.SAFE and not context.is_confirmed
         )
         allowed = not blocked and not requires_confirmation
         reason = _decision_reason(
@@ -475,7 +477,9 @@ def _classify_key_press(
             expected_consequence="Клавиша используется для навигации по странице или отмены действия.",
         )
     if "enter" in normalized_key or "return" in normalized_key:
-        if _focused_element_is_search(context.observation):
+        if _focused_element_is_search(context.observation) or _page_has_unambiguous_search_field(
+            context.observation
+        ):
             return ActionClassification(
                 risk=ActionRisk.SAFE,
                 action="запустить поиск клавишей Enter",
@@ -508,7 +512,6 @@ def _classify_click(
         context.observation,
         str(request.arguments.get("element_id", "")),
     )
-    text = _element_text(element) if element is not None else _classification_text(request, context)
     if element is None:
         return ActionClassification(
             risk=ActionRisk.EXTERNAL_SIDE_EFFECT,
@@ -519,6 +522,17 @@ def _classify_click(
             uncertain=True,
         )
 
+    action = f"нажать «{_element_name(element)}»"
+    navigation = _classify_http_navigation(
+        role=element.role,
+        target_url=element.target_url,
+        intent_text=_element_name(element),
+        action=action,
+    )
+    if navigation is not None:
+        return navigation
+
+    text = _element_text(element)
     matched = _matched_terms(text, _DESTRUCTIVE_TERMS)
     if matched:
         return ActionClassification(
@@ -564,7 +578,18 @@ def _classify_click_intent(
     request: ToolRequest,
     context: SecurityEvaluationContext,
 ) -> ActionClassification:
-    target = str(request.arguments.get("target", "")).strip() or "элемент по семантическому намерению"
+    target = (
+        str(request.arguments.get("target", "")).strip() or "элемент по семантическому намерению"
+    )
+    requested_intent = _classification_from_action_text(
+        _leading_action_text(target),
+        action=f"нажать «{target}»",
+    )
+    if requested_intent.risk in {
+        ActionRisk.DESTRUCTIVE,
+        ActionRisk.EXTERNAL_SIDE_EFFECT,
+    }:
+        return requested_intent
     if context.observation is not None and target:
         resolution = SemanticNavigationResolver().resolve_click(
             context.observation,
@@ -574,6 +599,26 @@ def _classify_click_intent(
         )
         if resolution.is_resolved and resolution.selected is not None:
             candidate = resolution.selected
+            candidate_action = f"нажать «{candidate.name or target}»"
+            concise_candidate_name = _concise_action_label(candidate.name)
+            navigation = _classify_http_navigation(
+                role=candidate.role,
+                target_url=candidate.target_url,
+                intent_text=" ".join(value for value in (target, concise_candidate_name) if value),
+                action=candidate_action,
+            )
+            if navigation is not None:
+                return navigation
+            if _is_read_only_composite_item(candidate, target):
+                return ActionClassification(
+                    risk=ActionRisk.SAFE,
+                    action=f"открыть «{target}»",
+                    expected_consequence=(
+                        "Выбран конкретный заголовок внутри составной карточки; "
+                        "соседние кнопки карточки не являются целью действия."
+                    ),
+                    matched_terms=("read_only_composite_item",),
+                )
             return _classification_from_action_text(
                 _normalize(
                     " ".join(
@@ -582,7 +627,6 @@ def _classify_click_intent(
                             candidate.role,
                             candidate.name,
                             candidate.visible_text,
-                            candidate.context,
                             candidate.target_url,
                             candidate.input_type,
                         )
@@ -594,25 +638,25 @@ def _classify_click_intent(
         if resolution.status.value == "ambiguous":
             candidates = resolution.candidates
             if candidates and all(_is_ordinary_navigation_link(item) for item in candidates):
-                candidate_text = _normalize(
-                    " ".join(
-                        value
-                        for candidate in candidates
-                        for value in (
-                            candidate.role,
-                            candidate.name,
-                            candidate.visible_text,
-                            candidate.context,
-                            candidate.target_url,
-                        )
-                        if value
+                candidate_labels = [
+                    _concise_action_label(candidate.name) for candidate in candidates
+                ]
+                intent_text = " ".join(
+                    value
+                    for value in (
+                        target,
+                        *(label for label in candidate_labels if label),
                     )
+                    if value
                 )
                 classification = _classification_from_action_text(
-                    candidate_text,
+                    _leading_action_text(intent_text),
                     action=f"выбрать и открыть ссылку «{target}»",
                 )
-                if classification.risk is not ActionRisk.SAFE:
+                if classification.risk in {
+                    ActionRisk.DESTRUCTIVE,
+                    ActionRisk.EXTERNAL_SIDE_EFFECT,
+                }:
                     return classification
                 return ActionClassification(
                     risk=ActionRisk.SAFE,
@@ -623,6 +667,43 @@ def _classify_click_intent(
                         "один семантический адресат."
                     ),
                     matched_terms=("ambiguous_navigation_links",),
+                    uncertain=True,
+                )
+            ambiguity_text = " ".join(
+                value
+                for value in (
+                    target,
+                    *(
+                        " ".join(
+                            str(value)
+                            for value in (
+                                candidate.name,
+                                candidate.visible_text,
+                                candidate.context,
+                            )
+                            if value
+                        )
+                        for candidate in candidates
+                    ),
+                )
+                if value
+            )
+            intent_classification = _classification_from_action_text(
+                _leading_action_text(ambiguity_text),
+                action=f"выбрать элемент «{target}»",
+            )
+            if intent_classification.risk not in {
+                ActionRisk.DESTRUCTIVE,
+                ActionRisk.EXTERNAL_SIDE_EFFECT,
+            }:
+                return ActionClassification(
+                    risk=ActionRisk.SAFE,
+                    action=f"уточнить и открыть «{target}»",
+                    expected_consequence=(
+                        "Найдено несколько навигационных кандидатов; действие не меняет данные. "
+                        "Навигация должна уточнить цель или запросить новое наблюдение."
+                    ),
+                    matched_terms=("ambiguous_navigation",),
                     uncertain=True,
                 )
             return ActionClassification(
@@ -640,10 +721,80 @@ def _classify_click_intent(
 
 
 def _is_ordinary_navigation_link(candidate: SemanticCandidate) -> bool:
-    if candidate.role != "link" or not candidate.target_url:
+    return _is_http_navigation(candidate.role, candidate.target_url)
+
+
+def _classify_http_navigation(
+    *,
+    role: str,
+    target_url: str | None,
+    intent_text: str,
+    action: str,
+) -> ActionClassification | None:
+    if not _is_http_navigation(role, target_url):
+        return None
+    classification = _classification_from_action_text(
+        _leading_action_text(intent_text),
+        action=action,
+    )
+    if classification.risk in {
+        ActionRisk.DESTRUCTIVE,
+        ActionRisk.EXTERNAL_SIDE_EFFECT,
+    }:
+        return classification
+    return ActionClassification(
+        risk=ActionRisk.SAFE,
+        action=action,
+        expected_consequence=(
+            "Действие открывает обычную HTTP(S)-ссылку для чтения и само по себе "
+            "не отправляет форму и не изменяет пользовательские данные."
+        ),
+        matched_terms=("read_only_navigation",),
+    )
+
+
+def _is_http_navigation(role: str, target_url: str | None) -> bool:
+    if role != "link" or not target_url:
         return False
-    target_url = candidate.target_url.strip().casefold()
-    return target_url.startswith(("http://", "https://"))
+    return target_url.strip().casefold().startswith(("http://", "https://"))
+
+
+def _is_read_only_composite_item(
+    candidate: SemanticCandidate,
+    target: str,
+) -> bool:
+    if candidate.role != "button" or candidate.input_type in {"submit", "reset"}:
+        return False
+    normalized_target = _normalize(target)
+    candidate_text = _normalize(
+        " ".join(value for value in (candidate.name, candidate.visible_text) if value)
+    )
+    if (
+        len(normalized_target) < 8
+        or len(normalized_target.split()) < 2
+        or normalized_target not in candidate_text
+        or len(candidate_text) < len(normalized_target) + 20
+    ):
+        return False
+    target_classification = _classification_from_action_text(
+        normalized_target,
+        action="open semantic item",
+    )
+    leading_classification = _classification_from_action_text(
+        _leading_action_text(candidate_text),
+        action="open semantic item",
+    )
+    risky = {ActionRisk.DESTRUCTIVE, ActionRisk.EXTERNAL_SIDE_EFFECT}
+    return target_classification.risk not in risky and leading_classification.risk not in risky
+
+
+def _concise_action_label(value: str | None) -> str:
+    text = _normalize(value or "")
+    return text if len(text) <= 72 else ""
+
+
+def _leading_action_text(value: str) -> str:
+    return _normalize(value)[:72].rstrip()
 
 
 def _classification_from_action_text(text: str, *, action: str) -> ActionClassification:
@@ -801,10 +952,7 @@ def _element_text(element: InteractiveElement) -> str:
 
 def _element_name(element: InteractiveElement) -> str:
     return (
-        element.accessible_name
-        or element.visible_text
-        or element.target_url
-        or element.element_id
+        element.accessible_name or element.visible_text or element.target_url or element.element_id
     )
 
 
@@ -891,9 +1039,7 @@ def _focused_element_is_search(observation: PageObservation | None) -> bool:
         return False
     focused = observation.focused_element
     focused_text = " ".join(
-        value
-        for value in (focused.accessible_name, focused.visible_text)
-        if value
+        value for value in (focused.accessible_name, focused.visible_text) if value
     )
     if _is_search_field_semantics(
         focused_text,
@@ -911,9 +1057,7 @@ def _focused_element_is_search(observation: PageObservation | None) -> bool:
         }
         if focused_name and focused_name in field_names:
             field_text = " ".join(
-                value
-                for value in (field.label, field.placeholder, field.field_name)
-                if value
+                value for value in (field.label, field.placeholder, field.field_name) if value
             )
             return _is_search_field_semantics(
                 field_text,
@@ -921,6 +1065,25 @@ def _focused_element_is_search(observation: PageObservation | None) -> bool:
                 input_type=field.input_type or "",
             )
     return False
+
+
+def _page_has_unambiguous_search_field(observation: PageObservation | None) -> bool:
+    """Allow Enter when the page exposes one clear search form and no other form target."""
+
+    if observation is None or observation.focused_element is not None:
+        return False
+    search_fields = [
+        field
+        for field in observation.form_fields
+        if _is_search_field_semantics(
+            " ".join(
+                value for value in (field.label, field.placeholder, field.field_name) if value
+            ),
+            role=field.role,
+            input_type=field.input_type or "",
+        )
+    ]
+    return len(observation.form_fields) == 1 and len(search_fields) == 1
 
 
 def _is_search_field_semantics(text: str, *, role: str, input_type: str) -> bool:
@@ -976,7 +1139,9 @@ def _redact_arguments(
 ) -> Mapping[str, object]:
     redacted: dict[str, object] = {}
     for key, value in arguments.items():
-        if key in sensitive_fields or any(hint in key.casefold() for hint in _SENSITIVE_FIELD_HINTS):
+        if key in sensitive_fields or any(
+            hint in key.casefold() for hint in _SENSITIVE_FIELD_HINTS
+        ):
             redacted[key] = "[REDACTED]"
         else:
             redacted[key] = value

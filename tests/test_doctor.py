@@ -6,6 +6,7 @@ from scout_pilot.cli.doctor import (
     DoctorCheck,
     DoctorReport,
     DoctorSettings,
+    check_architecture_boundaries,
     check_browser_profile,
     check_env_file,
     check_git_status,
@@ -71,6 +72,32 @@ def test_git_dirty_tree_is_warning_not_blocker(tmp_path):
     assert result.status == "warning"
     assert result.blocker is False
     assert "README.md" in result.message_ru
+
+
+def test_architecture_boundary_check_accepts_the_current_repository():
+    repository_root = Path(__file__).resolve().parents[1]
+
+    result = check_architecture_boundaries(cwd=repository_root)
+
+    assert result.status == "ok"
+    assert result.blocker is False
+    assert "Playwright" in result.message_ru
+    assert "HH.ru" in result.message_ru
+
+
+def test_architecture_boundary_check_blocks_playwright_outside_browser(tmp_path):
+    runtime_dir = tmp_path / "src" / "scout_pilot" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "bad_import.py").write_text(
+        "from playwright.async_api import Page\n",
+        encoding="utf-8",
+    )
+
+    result = check_architecture_boundaries(cwd=tmp_path)
+
+    assert result.status == "failed"
+    assert result.blocker is True
+    assert "Playwright" in result.message_ru
 
 
 def test_run_doctor_uses_fake_browser_smoke_and_reports_blockers(tmp_path, monkeypatch):

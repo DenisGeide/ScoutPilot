@@ -62,6 +62,24 @@ from scout_pilot.tools.types import ToolExecutionResult, ToolExecutionStatus, To
 
 logger = logging.getLogger(__name__)
 
+_UPPER_BOUND_CLAUSE_PATTERN = re.compile(
+    r"(?ix)"
+    r"(?:\b(?:с\s+указанн\w+\s+)?(?:зарплат\w*|доход\w*|цен\w*|salary|pay|price)\s*)?"
+    r"\b(?:до|не\s+выше|не\s+более|максимум|up\s+to|at\s+most|under|maximum)\s*"
+    r"(?:[$€£₽]\s*)?(?P<number>\d[\d\s.,]*)"
+    r"(?:\s*(?:руб\w*|доллар\w*|usd|eur|rub|₽|\$|€))?"
+)
+_LOWER_BOUND_CLAUSE_PATTERN = re.compile(
+    r"(?ix)"
+    r"(?:\b(?:с\s+указанн\w+\s+)?(?:зарплат\w*|доход\w*|цен\w*|salary|pay|price)\s*)?"
+    r"\b(?:от|не\s+ниже|не\s+менее|минимум|from|at\s+least|over|minimum)\s*"
+    r"(?:[$€£₽]\s*)?(?P<number>\d[\d\s.,]*)"
+    r"(?:\s*(?:руб\w*|доллар\w*|usd|eur|rub|₽|\$|€))?"
+)
+_BOUND_SEARCH_TERMS_PATTERN = re.compile(
+    r"(?i)\b(?:с\s+указанн\w+\s+)?(?:зарплат\w*|доход\w*|цен\w*|salary|pay|price)\b"
+)
+
 
 class AgentRuntime(Protocol):
     """Coordinate the autonomous agent lifecycle."""
@@ -86,6 +104,7 @@ class AutonomousAgentRuntime:
         settings: RuntimeSettings | None = None,
         security_constraints: Sequence[str] = (),
         confirmation_constraints: Sequence[str] = (),
+        initial_memory_summaries: Sequence[str] = (),
         budget: Mapping[str, int] | None = None,
     ) -> None:
         self._observation_engine = observation_engine
@@ -98,12 +117,18 @@ class AutonomousAgentRuntime:
         self._settings = settings or RuntimeSettings()
         self._security_constraints = tuple(security_constraints)
         self._confirmation_constraints = tuple(confirmation_constraints)
+        self._initial_memory_summaries = tuple(
+            summary.strip() for summary in initial_memory_summaries if summary.strip()
+        )
         self._budget = dict(budget or {})
         self._state = AgentState.IDLE
         self._cancel_requested = False
         self._cancel_reason = "Cancelled by user."
         self._pending_confirmation: Mapping[str, object] | None = None
         self.last_result: AgentTaskResult | None = None
+        self.last_observed_resource_urls: tuple[str, ...] = ()
+        self.last_visited_target_urls: tuple[str, ...] = ()
+        self.last_repeated_target_preventions = 0
 
     @property
     def state(self) -> AgentState:
@@ -151,13 +176,34 @@ class AutonomousAgentRuntime:
         previous_observation_signature: tuple[object, ...] | None = None
         visited_target_urls: set[str] = set()
         observed_resource_urls: set[str] = set()
+        matched_resource_urls: set[str] = set()
+        prior_resource_urls = _resource_urls_from_summaries(self._initial_memory_summaries)
+        attempted_tool_requests: set[tuple[tuple[object, ...], str]] = set()
+        resolved_tool_followups: dict[tuple[tuple[object, ...], str], ToolRequest] = {}
+        search_reformulation_counts: Counter[str] = Counter()
+        pending_fast_followup: ToolRequest | None = None
+        pending_fast_followup_event = ""
         repeated_target_count = 0
         requested_resource_count = _requested_distinct_resource_count(task.text)
+        auto_finalize_resource_count = (
+            None if _task_requires_qualified_resources(task.text) else requested_resource_count
+        )
+        resource_probe_target = _qualified_resource_probe_target(
+            task.text,
+            requested_resource_count,
+        )
+        memory_only_followup = _task_is_memory_only_followup(
+            task.text,
+            prior_resource_urls,
+        )
         started_at = monotonic()
         plan: ExecutionPlan | None = None
         failure_count = 0
         self._state = AgentState.IDLE
         self.last_result = None
+        self.last_observed_resource_urls = ()
+        self.last_visited_target_urls = ()
+        self.last_repeated_target_preventions = 0
 
         yield self._event(
             "task_started",
@@ -250,9 +296,7 @@ class AutonomousAgentRuntime:
                             "success": dismiss_result.success,
                             "dismissed": dismissed,
                             "message": dismiss_result.message,
-                            "next_action": (
-                                "continue_task" if dismissed else "reason_about_modal"
-                            ),
+                            "next_action": ("continue_task" if dismissed else "reason_about_modal"),
                         },
                     )
                     if dismiss_result.success and dismissed:
@@ -277,6 +321,9 @@ class AutonomousAgentRuntime:
                 )
                 if _resource_observation_has_evidence(observation):
                     observed_resource_urls.add(str(observation.url))
+                    self.last_observed_resource_urls = tuple(sorted(observed_resource_urls))
+                    if _resource_observation_matches_explicit_evidence(task.text, observation):
+                        matched_resource_urls.add(str(observation.url))
                 yield self._event(
                     "observation_captured",
                     RuntimeStatus.RUNNING,
@@ -289,6 +336,50 @@ class AutonomousAgentRuntime:
                         "summary": observation.summary,
                     },
                 )
+                if memory_only_followup:
+                    yield self._transition(
+                        AgentState.REASONING,
+                        "Answer an analytical follow-up from bounded conversation memory.",
+                        task_id,
+                        progress,
+                    )
+                    answer = await self._finalize_answer(
+                        task=task,
+                        task_id=task_id,
+                        observation=observation,
+                        visited_target_urls=prior_resource_urls,
+                        reason=(
+                            "This is a read-only comparison or ranking of results collected in "
+                            "the previous conversation turn. Answer from memory without browsing."
+                        ),
+                    )
+                    budget_event = self._context_budget_event(
+                        "memory_followup_finalization",
+                        self._reasoning_engine,
+                        task_id,
+                        progress,
+                    )
+                    if budget_event is not None:
+                        yield budget_event
+                    result = await self._complete(task_id, task, progress, plan, answer)
+                    self.last_result = result
+                    yield self._event(
+                        "task_completed",
+                        RuntimeStatus.COMPLETED,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.task.completed",
+                        details={
+                            **_result_details(result),
+                            "completion_trigger": "memory_only_followup",
+                            **_run_evidence_details(
+                                observed_resource_urls,
+                                visited_target_urls,
+                                self.last_repeated_target_preventions,
+                            ),
+                        },
+                    )
+                    return
                 blocker_decision = _page_blocker_decision(observation)
                 if blocker_decision is not None:
                     await self._remember_event(
@@ -298,9 +389,7 @@ class AutonomousAgentRuntime:
                     )
                     yield self._event(
                         "page_blocker_detected",
-                        RuntimeStatus.FAILED
-                        if blocker_decision["stop"]
-                        else RuntimeStatus.RUNNING,
+                        RuntimeStatus.FAILED if blocker_decision["stop"] else RuntimeStatus.RUNNING,
                         task_id=task_id,
                         progress=progress,
                         message_key="runtime.page_blocker.detected",
@@ -336,12 +425,24 @@ class AutonomousAgentRuntime:
                     yield event
                     return
 
-                completed_resource_count = _dominant_visited_resource_count(
-                    observed_resource_urls
+                completed_resource_count = _dominant_visited_resource_count(observed_resource_urls)
+                matched_resource_count = _dominant_visited_resource_count(matched_resource_urls)
+                matched_count_reached = (
+                    resource_probe_target is not None
+                    and requested_resource_count is not None
+                    and matched_resource_count >= requested_resource_count
+                )
+                qualified_probe_reached = (
+                    resource_probe_target is not None
+                    and completed_resource_count >= resource_probe_target
                 )
                 if (
-                    requested_resource_count is not None
-                    and completed_resource_count >= requested_resource_count
+                    (
+                        auto_finalize_resource_count is not None
+                        and completed_resource_count >= auto_finalize_resource_count
+                    )
+                    or matched_count_reached
+                    or qualified_probe_reached
                 ):
                     yield self._transition(
                         AgentState.REASONING,
@@ -355,8 +456,9 @@ class AutonomousAgentRuntime:
                         observation=observation,
                         visited_target_urls=visited_target_urls,
                         reason=(
-                            f"The requested {requested_resource_count} distinct resource pages "
-                            "have been read."
+                            f"Collected {completed_resource_count} distinct resource pages; "
+                            f"{matched_resource_count} contain the explicit evidence requested by "
+                            "the task. Return the best verified result now."
                         ),
                     )
                     budget_event = self._context_budget_event(
@@ -383,8 +485,20 @@ class AutonomousAgentRuntime:
                         message_key="runtime.task.completed",
                         details={
                             **_result_details(result),
-                            "completion_trigger": "requested_resource_count_reached",
+                            "completion_trigger": (
+                                "matched_resource_count_reached"
+                                if matched_count_reached
+                                else "qualified_resource_probe_reached"
+                                if qualified_probe_reached
+                                else "requested_resource_count_reached"
+                            ),
                             "completed_resource_count": completed_resource_count,
+                            "matched_resource_count": matched_resource_count,
+                            **_run_evidence_details(
+                                observed_resource_urls,
+                                visited_target_urls,
+                                self.last_repeated_target_preventions,
+                            ),
                         },
                     )
                     return
@@ -428,30 +542,71 @@ class AutonomousAgentRuntime:
                         },
                     )
 
-                yield self._transition(
-                    AgentState.REASONING,
-                    "Ask provider-neutral Reasoning Engine for next decision.",
-                    task_id,
-                    progress,
-                )
-                reasoning_observation = _observation_with_visited_targets_last(
-                    observation,
-                    visited_target_urls,
-                )
-                reasoning = await self._reason(
-                    task,
-                    task_id,
-                    reasoning_observation,
-                    visited_target_urls,
-                )
-                budget_event = self._context_budget_event(
-                    "reasoning",
-                    self._reasoning_engine,
-                    task_id,
-                    progress,
-                )
-                if budget_event is not None:
-                    yield budget_event
+                if pending_fast_followup is None:
+                    collection_followup = _deterministic_resource_collection_tool(
+                        task_text=task.text,
+                        requested_resource_count=requested_resource_count,
+                        resource_probe_target=resource_probe_target,
+                        observation=observation,
+                        observed_resource_urls=observed_resource_urls,
+                        matched_resource_urls=matched_resource_urls,
+                        visited_target_urls=visited_target_urls,
+                        prior_resource_urls=prior_resource_urls,
+                        available_tool_names={schema.name for schema in self._tool_schemas},
+                    )
+                    if collection_followup is not None:
+                        pending_fast_followup = collection_followup
+                        pending_fast_followup_event = "resource_collection_followup_selected"
+
+                if pending_fast_followup is not None:
+                    yield self._transition(
+                        AgentState.REASONING,
+                        "Execution Intelligence selected a deterministic browser follow-up.",
+                        task_id,
+                        progress,
+                    )
+                    reasoning = ReasoningResult.tool_selected(
+                        pending_fast_followup,
+                        "Execute the deterministic follow-up selected from browser state.",
+                    )
+                    selected_followup_event = (
+                        pending_fast_followup_event or "deterministic_followup_selected"
+                    )
+                    pending_fast_followup = None
+                    pending_fast_followup_event = ""
+                    yield self._event(
+                        selected_followup_event,
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.tool.semantic_recovery_selected",
+                        details={"next_action": "open_unvisited_search_result"},
+                    )
+                else:
+                    yield self._transition(
+                        AgentState.REASONING,
+                        "Ask provider-neutral Reasoning Engine for next decision.",
+                        task_id,
+                        progress,
+                    )
+                    reasoning_observation = _observation_with_visited_targets_last(
+                        observation,
+                        visited_target_urls,
+                    )
+                    reasoning = await self._reason(
+                        task,
+                        task_id,
+                        reasoning_observation,
+                        visited_target_urls,
+                    )
+                    budget_event = self._context_budget_event(
+                        "reasoning",
+                        self._reasoning_engine,
+                        task_id,
+                        progress,
+                    )
+                    if budget_event is not None:
+                        yield budget_event
                 yield self._event(
                     "reasoning_completed",
                     RuntimeStatus.RUNNING,
@@ -461,30 +616,71 @@ class AutonomousAgentRuntime:
                     details={
                         "status": reasoning.status.value,
                         "message": reasoning.message,
-                        "provider_error": _provider_error_details(
-                            reasoning.provider_error
-                        ),
+                        "provider_error": _provider_error_details(reasoning.provider_error),
                     },
                 )
 
                 if reasoning.status is ReasoningStatus.ANSWER:
-                    result = await self._complete(
-                        task_id,
-                        task,
-                        progress,
-                        plan,
-                        reasoning.answer or reasoning.message,
+                    answer = reasoning.answer or reasoning.message
+                    recovery_tool = _incomplete_qualified_answer_recovery_tool(
+                        task_text=task.text,
+                        answer=answer,
+                        requested_resource_count=requested_resource_count,
+                        resource_probe_target=resource_probe_target,
+                        observation=observation,
+                        observed_resource_urls=observed_resource_urls,
+                        visited_target_urls=visited_target_urls,
+                        available_tool_names={schema.name for schema in self._tool_schemas},
                     )
-                    self.last_result = result
-                    yield self._event(
-                        "task_completed",
-                        RuntimeStatus.COMPLETED,
-                        task_id=task_id,
-                        progress=progress,
-                        message_key="runtime.task.completed",
-                        details=_result_details(result),
-                    )
-                    return
+                    if recovery_tool is not None:
+                        reasoning = ReasoningResult.tool_selected(
+                            recovery_tool,
+                            "Continue collecting distinct resources before finalizing a filtered result.",
+                        )
+                        yield self._event(
+                            "incomplete_answer_collection_continued",
+                            RuntimeStatus.RUNNING,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.answer.collection_continued",
+                            details={
+                                "requested_resource_count": requested_resource_count,
+                                "answer_resource_count": _answer_observed_resource_count(
+                                    answer,
+                                    observed_resource_urls,
+                                ),
+                                "observed_resource_count": _dominant_visited_resource_count(
+                                    observed_resource_urls
+                                ),
+                                "probe_target": resource_probe_target,
+                                "next_action": recovery_tool.name,
+                            },
+                        )
+                    else:
+                        result = await self._complete(
+                            task_id,
+                            task,
+                            progress,
+                            plan,
+                            answer,
+                        )
+                        self.last_result = result
+                        yield self._event(
+                            "task_completed",
+                            RuntimeStatus.COMPLETED,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.task.completed",
+                            details={
+                                **_result_details(result),
+                                **_run_evidence_details(
+                                    observed_resource_urls,
+                                    visited_target_urls,
+                                    self.last_repeated_target_preventions,
+                                ),
+                            },
+                        )
+                        return
 
                 if reasoning.status is ReasoningStatus.NEEDS_CONFIRMATION:
                     await self._remember_event(
@@ -556,8 +752,107 @@ class AutonomousAgentRuntime:
                     continue
 
                 selected_tool = reasoning.selected_tool
+                resolution_request_key = (
+                    _observation_signature(observation),
+                    _tool_request_signature(selected_tool),
+                )
+                resolved_followup = resolved_tool_followups.get(resolution_request_key)
+                if resolved_followup is not None:
+                    selected_tool = resolved_followup
+                    yield self._event(
+                        "resolved_target_reused",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.tool.resolved_target_reused",
+                        details={
+                            "tool_name": selected_tool.name,
+                            "next_action": "execute_previously_resolved_target",
+                        },
+                    )
+                selected_tool, upper_bound_removed = _without_upper_bound_search_filter(
+                    task.text,
+                    observation,
+                    selected_tool,
+                )
+                if upper_bound_removed:
+                    yield self._event(
+                        "search_upper_bound_removed",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=progress,
+                        message_key="runtime.tool.search_upper_bound_removed",
+                        details={
+                            "tool_name": selected_tool.name,
+                            "next_action": "search_by_subject_and_post_filter_upper_bound",
+                        },
+                    )
+                search_scope = _search_fill_scope(observation, selected_tool)
+                if (
+                    search_scope is not None
+                    and search_reformulation_counts[search_scope]
+                    >= self._settings.max_search_reformulations
+                ):
+                    unvisited_result = _first_unvisited_resource_tool(
+                        observation,
+                        visited_target_urls,
+                        preferred_shape=_preferred_resource_shape(
+                            observed_resource_urls,
+                            prior_resource_urls,
+                        ),
+                    )
+                    if unvisited_result is not None:
+                        selected_tool = unvisited_result
+                        search_scope = None
+                        yield self._event(
+                            "search_reformulation_redirected",
+                            RuntimeStatus.RUNNING,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.tool.search_reformulation_redirected",
+                            details={
+                                "tool_name": selected_tool.name,
+                                "next_action": "open_unvisited_search_result",
+                            },
+                        )
                 selected_plan_step = _find_plan_step(plan, selected_tool)
                 selected_target_url = _target_url_for_tool(observation, selected_tool)
+                preferred_resource_shape = _preferred_resource_shape(
+                    observed_resource_urls,
+                    prior_resource_urls,
+                ) or _dominant_interactive_resource_shape(observation)
+                selected_resource_shape = (
+                    _url_resource_shape(selected_target_url) if selected_target_url else None
+                )
+                if (
+                    requested_resource_count is not None
+                    and preferred_resource_shape is not None
+                    and selected_resource_shape is not None
+                    and selected_resource_shape != preferred_resource_shape
+                ):
+                    scoped_alternative = _first_unvisited_resource_tool(
+                        observation,
+                        visited_target_urls,
+                        preferred_shape=preferred_resource_shape,
+                    )
+                    if scoped_alternative is not None:
+                        selected_tool = scoped_alternative
+                        selected_target_url = _target_url_for_tool(
+                            observation,
+                            selected_tool,
+                        )
+                        selected_plan_step = _find_plan_step(plan, selected_tool)
+                        yield self._event(
+                            "off_scope_resource_redirected",
+                            RuntimeStatus.RUNNING,
+                            task_id=task_id,
+                            progress=progress,
+                            message_key="runtime.tool.off_scope_resource_redirected",
+                            details={
+                                "tool_name": selected_tool.name,
+                                "next_action": "open_same_resource_type",
+                            },
+                        )
                 if selected_target_url and _target_was_visited(
                     selected_target_url,
                     visited_target_urls,
@@ -586,9 +881,68 @@ class AutonomousAgentRuntime:
                                 "next_action": "open_unvisited_equivalent_target",
                             },
                         )
+                        self.last_repeated_target_preventions += 1
                         selected_tool = alternative_tool
                         selected_target_url = alternative_target_url
                         selected_plan_step = _find_plan_step(plan, selected_tool)
+                request_attempt_key = (
+                    _observation_signature(observation),
+                    _tool_request_signature(selected_tool),
+                )
+                if request_attempt_key in attempted_tool_requests and not (
+                    selected_target_url
+                    and _target_was_visited(selected_target_url, visited_target_urls)
+                ):
+                    failure_count += 1
+                    message = (
+                        "The exact tool request was already attempted on the unchanged semantic "
+                        "page. Re-observe, resolve a more specific target, choose a discovered "
+                        "URL, or use a different tool."
+                    )
+                    await self._remember_event(
+                        task_id,
+                        f"repeated_tool_request_blocked_{iteration}",
+                        f"{message} Tool: {selected_tool.name}.",
+                    )
+                    yield self._event(
+                        "repeated_tool_request_blocked",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=_progress(iteration, self._settings, failure_count, plan),
+                        message_key="runtime.tool.repeated_request_blocked",
+                        details={
+                            "tool_name": selected_tool.name,
+                            "next_action": "choose_different_tool_or_more_specific_target",
+                        },
+                    )
+                    if failure_count >= self._settings.max_failures:
+                        partial_progress = _progress(
+                            iteration,
+                            self._settings,
+                            failure_count,
+                            plan,
+                        )
+                        result = await self._partial_result_after_limit(
+                            task=task,
+                            task_id=task_id,
+                            observation=observation,
+                            visited_target_urls=visited_target_urls,
+                            progress=partial_progress,
+                            plan=plan,
+                            reason=message,
+                        )
+                        self.last_result = result
+                        yield self._event(
+                            "task_partial_result",
+                            RuntimeStatus.COMPLETED,
+                            task_id=task_id,
+                            progress=partial_progress,
+                            message_key="runtime.task.partial_result",
+                            details=_result_details(result),
+                        )
+                        return
+                    continue
+                attempted_tool_requests.add(request_attempt_key)
                 yield self._event(
                     "tool_selected",
                     RuntimeStatus.RUNNING,
@@ -610,6 +964,7 @@ class AutonomousAgentRuntime:
                     visited_target_urls,
                 ):
                     repeated_target_count += 1
+                    self.last_repeated_target_preventions += 1
                     message = (
                         "Repeated navigation to an already visited target URL was blocked. "
                         "Choose a different unvisited semantic result or answer from memory."
@@ -659,8 +1014,22 @@ class AutonomousAgentRuntime:
                     progress,
                 )
                 tool_result = await self._tool_runtime.execute(selected_tool)
+                if tool_result.success and search_scope is not None:
+                    search_reformulation_counts[search_scope] += 1
+                    if any(schema.name == "browser.press_key" for schema in self._tool_schemas):
+                        pending_fast_followup = ToolRequest(
+                            name="browser.press_key",
+                            arguments={"key": "Enter"},
+                        )
+                        pending_fast_followup_event = "search_submit_selected"
+                resolved_followup = _resolved_target_followup(selected_tool, tool_result)
+                if resolved_followup is not None:
+                    resolved_tool_followups[request_attempt_key] = resolved_followup
+                    pending_fast_followup = resolved_followup
+                    pending_fast_followup_event = "resolved_target_followup_selected"
                 if tool_result.success and selected_target_url:
                     visited_target_urls.add(selected_target_url)
+                    self.last_visited_target_urls = tuple(sorted(visited_target_urls))
                     repeated_target_count = 0
                 await self._remember_tool_result(task_id, tool_result)
                 progress = _progress(iteration, self._settings, failure_count, plan)
@@ -677,9 +1046,7 @@ class AutonomousAgentRuntime:
                         "message": tool_result.message,
                         "retryable": tool_result.retryable,
                         "error_code": tool_result.error_code,
-                        "security_decision": _security_decision_from_tool_result(
-                            tool_result
-                        ),
+                        "security_decision": _security_decision_from_tool_result(tool_result),
                     },
                 )
 
@@ -711,9 +1078,7 @@ class AutonomousAgentRuntime:
                     progress,
                 )
                 post_action_observation = await self._observation_engine.observe()
-                previous_observation_signature = _observation_signature(
-                    post_action_observation
-                )
+                previous_observation_signature = _observation_signature(post_action_observation)
                 await self._remember_observation(
                     task_id,
                     iteration,
@@ -741,9 +1106,7 @@ class AutonomousAgentRuntime:
                     )
                     yield self._event(
                         "page_blocker_detected",
-                        RuntimeStatus.FAILED
-                        if blocker_decision["stop"]
-                        else RuntimeStatus.RUNNING,
+                        RuntimeStatus.FAILED if blocker_decision["stop"] else RuntimeStatus.RUNNING,
                         task_id=task_id,
                         progress=progress,
                         message_key="runtime.page_blocker.detected",
@@ -794,6 +1157,50 @@ class AutonomousAgentRuntime:
                     message_key="runtime.reflection.completed",
                     details=_evaluation_details(evaluation),
                 )
+
+                semantic_recovery = _semantic_failure_recovery_tool(
+                    task_text=task.text,
+                    request=selected_tool,
+                    result=tool_result,
+                    observation=post_action_observation,
+                    visited_target_urls=visited_target_urls,
+                )
+                if semantic_recovery is not None:
+                    pending_fast_followup = semantic_recovery
+                    pending_fast_followup_event = "semantic_recovery_selected"
+                    failure_count += 1
+                    await self._remember_event(
+                        task_id,
+                        f"semantic_recovery_{iteration}",
+                        (
+                            "A semantic target was ambiguous or unavailable. Continue with the "
+                            "next unvisited resource URL already present in the observation."
+                        ),
+                    )
+                    yield self._event(
+                        "semantic_recovery_scheduled",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=_progress(iteration, self._settings, failure_count, plan),
+                        message_key="runtime.tool.semantic_recovery_scheduled",
+                        details={
+                            "failed_tool": selected_tool.name,
+                            "recovery_tool": semantic_recovery.name,
+                            "next_action": "open_unvisited_search_result",
+                        },
+                    )
+                    yield self._event(
+                        "evaluation_completed",
+                        RuntimeStatus.RUNNING,
+                        task_id=task_id,
+                        progress=_progress(iteration, self._settings, failure_count, plan),
+                        message_key="runtime.evaluation.completed",
+                        details={
+                            "recommended_action": "alternative_action",
+                            "outcome": evaluation.outcome.value,
+                        },
+                    )
+                    continue
 
                 if evaluation.outcome is StepOutcome.SUCCESS:
                     failure_count = 0
@@ -940,7 +1347,7 @@ class AutonomousAgentRuntime:
                 progress,
                 plan,
                 TaskTerminationReason.FATAL_ERROR,
-                str(exc),
+                f"Unexpected runtime failure ({type(exc).__name__}).",
                 failure_count + 1,
             )
             self.last_result = result
@@ -1022,10 +1429,7 @@ class AutonomousAgentRuntime:
             if "http://" in summary or "https://" in summary
         ]
         if not evidence:
-            return (
-                "Не удалось сформировать полный ответ до защитной остановки. "
-                f"Причина: {reason}"
-            )
+            return f"Не удалось сформировать полный ответ до защитной остановки. Причина: {reason}"
         lines = "\n".join(f"- {item}" for item in evidence[:8])
         return (
             "Полный проход не завершен, но агент сохранил уже проверенные данные:\n"
@@ -1542,12 +1946,16 @@ class AutonomousAgentRuntime:
 
     def _memory_summaries(self, task_id: str) -> tuple[str, ...]:
         try:
-            return tuple(
+            current = tuple(
                 self._memory.context_summaries(
                     task_id,
                     max_items=self._settings.max_memory_summaries,
                 )
             )
+            initial = tuple(dict.fromkeys(self._initial_memory_summaries))[-3:]
+            current_limit = max(self._settings.max_memory_summaries - len(initial), 0)
+            recent_current = current[-current_limit:] if current_limit else ()
+            return tuple(dict.fromkeys((*initial, *recent_current)))
         except Exception as exc:
             logger.warning(
                 "memory_summary_failed",
@@ -1557,7 +1965,7 @@ class AutonomousAgentRuntime:
                     "error_type": type(exc).__name__,
                 },
             )
-            return ()
+            return self._initial_memory_summaries[-self._settings.max_memory_summaries :]
 
 
 def _progress(
@@ -1686,6 +2094,20 @@ def _page_blocker_decision(observation: PageObservation) -> Mapping[str, object]
         return None
 
     issue_details = [_page_issue_details(issue) for issue in observation.issues]
+    if PageIssueCode.OBSERVATION_ERROR in issue_codes:
+        return _blocker_decision(
+            blocker_type="browser_observation_error",
+            runtime_response="restart_browser",
+            message="Browser observation is unavailable; runtime stops before reasoning over missing page state.",
+            message_ru=(
+                "Связь с браузером потеряна или страницу не удалось прочитать. "
+                "Агент остановил текущую задачу без действий; перед следующей задачей браузер можно перезапустить."
+            ),
+            issues=issue_details,
+            stop=True,
+            requires_user_input=False,
+            safe_dismiss_allowed=False,
+        )
     if PageIssueCode.CAPTCHA_BLOCKING_PAGE in issue_codes:
         return _blocker_decision(
             blocker_type="captcha_blocking_page",
@@ -1855,6 +2277,43 @@ def _target_url_for_tool(
     return element.target_url.strip() or None
 
 
+def _resolved_target_followup(
+    request: ToolRequest,
+    result: ToolExecutionResult,
+) -> ToolRequest | None:
+    """Turn a resolved click intent into a concrete, security-checked action."""
+
+    if request.name != "browser.resolve_target" or not result.success:
+        return None
+    if request.arguments.get("kind") != "click":
+        return None
+
+    resolution = result.data.get("resolution")
+    if not isinstance(resolution, Mapping) or resolution.get("status") != "resolved":
+        return None
+    selected = resolution.get("selected")
+    if not isinstance(selected, Mapping):
+        return None
+
+    target_url = selected.get("target_url")
+    if isinstance(target_url, str):
+        target_url = target_url.strip()
+        parsed = urlparse(target_url)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return ToolRequest(
+                name="browser.navigate",
+                arguments={"url": target_url},
+            )
+
+    element_id = selected.get("id")
+    if isinstance(element_id, str) and element_id.strip():
+        return ToolRequest(
+            name="browser.click",
+            arguments={"element_id": element_id.strip()},
+        )
+    return None
+
+
 def _optional_tool_argument(request: ToolRequest, name: str) -> str | None:
     value = request.arguments.get(name)
     if not isinstance(value, str):
@@ -1902,6 +2361,316 @@ def _observation_with_visited_targets_last(
     )
 
 
+def _search_fill_scope(
+    observation: PageObservation,
+    request: ToolRequest,
+) -> str | None:
+    is_search_fill = False
+    if request.name == "browser.fill_by_label":
+        label = request.arguments.get("label")
+        is_search_fill = isinstance(label, str) and bool(
+            re.search(
+                r"(?i)(?:\bsearch\b|\bfind\b|\bquery\b|\bпоиск\b|\bискать\b|\bнайти\b)",
+                label,
+            )
+        )
+    elif request.name == "browser.fill":
+        element_id = request.arguments.get("element_id")
+        if isinstance(element_id, str):
+            field = next(
+                (
+                    candidate
+                    for candidate in observation.form_fields
+                    if candidate.field_id == element_id
+                ),
+                None,
+            )
+            is_search_fill = bool(
+                field is not None and (field.role == "searchbox" or field.input_type == "search")
+            )
+    if not is_search_fill:
+        return None
+
+    parsed = urlparse(observation.url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme.casefold()}://{parsed.netloc.casefold()}"
+
+
+def _without_upper_bound_search_filter(
+    task_text: str,
+    observation: PageObservation,
+    request: ToolRequest,
+) -> tuple[ToolRequest, bool]:
+    if _search_fill_scope(observation, request) is None:
+        return request, False
+
+    value = request.arguments.get("value")
+    if not isinstance(value, str) or not value.strip():
+        return request, False
+    task_bounds = {
+        _digits_only(match.group("number"))
+        for match in _UPPER_BOUND_CLAUSE_PATTERN.finditer(task_text)
+    }
+    task_bounds.discard("")
+    if not task_bounds:
+        return request, False
+    value_digits = _digits_only(value)
+    matching_bounds = {bound for bound in task_bounds if bound in value_digits}
+    if not matching_bounds:
+        return request, False
+
+    cleaned = _UPPER_BOUND_CLAUSE_PATTERN.sub(" ", value)
+    for bound in matching_bounds:
+        spaced_number = r"\s*".join(re.escape(digit) for digit in bound)
+        cleaned = re.sub(spaced_number, " ", cleaned)
+    cleaned = _BOUND_SEARCH_TERMS_PATTERN.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:-")
+    if not cleaned or cleaned == value.strip():
+        return request, False
+
+    return (
+        ToolRequest(
+            name=request.name,
+            arguments={**request.arguments, "value": cleaned},
+        ),
+        True,
+    )
+
+
+def _digits_only(value: str) -> str:
+    return "".join(character for character in value if character.isdigit())
+
+
+def _resource_urls_from_summaries(summaries: Sequence[str]) -> set[str]:
+    urls = {
+        raw_url.rstrip(".,;:)]}")
+        for summary in summaries
+        for raw_url in re.findall(r"https?://[^\s<>\"']+", summary)
+    }
+    return {url for url in urls if _url_resource_shape(url) is not None}
+
+
+def _task_is_memory_only_followup(task_text: str, prior_resource_urls: set[str]) -> bool:
+    if not prior_resource_urls:
+        return False
+    normalized = " ".join(task_text.casefold().split())
+    analysis_terms = (
+        "compare",
+        "rank",
+        "evaluate",
+        "score",
+        "summarize",
+        "best option",
+        "сравн",
+        "оцени",
+        "рейтинг",
+        "выбери лучш",
+        "лучший вариант",
+        "резюм",
+    )
+    browsing_terms = (
+        "find ",
+        "search",
+        "open ",
+        "navigate",
+        "visit ",
+        "read each",
+        "click",
+        "найд",
+        "ищи",
+        "поиск",
+        "открой",
+        "перейди",
+        "прочитай кажд",
+        "нажм",
+    )
+    return any(term in normalized for term in analysis_terms) and not any(
+        term in normalized for term in browsing_terms
+    )
+
+
+def _preferred_resource_shape(
+    observed_resource_urls: set[str],
+    prior_resource_urls: set[str],
+) -> tuple[str, str, str] | None:
+    return _dominant_resource_shape(observed_resource_urls) or _dominant_resource_shape(
+        prior_resource_urls
+    )
+
+
+def _first_unvisited_resource_tool(
+    observation: PageObservation,
+    visited_target_urls: set[str],
+    *,
+    preferred_shape: tuple[str, str, str] | None = None,
+) -> ToolRequest | None:
+    candidate = next(
+        (
+            element
+            for element in observation.interactive_elements
+            if element.role == "link"
+            and element.target_url
+            and _url_resource_shape(element.target_url) is not None
+            and (
+                preferred_shape is None
+                or _url_resource_shape(element.target_url) == preferred_shape
+            )
+            and not _target_was_visited(element.target_url, visited_target_urls)
+            and _target_identity(element.target_url) != _target_identity(observation.url)
+        ),
+        None,
+    )
+    if candidate is None or candidate.target_url is None:
+        return None
+    return ToolRequest(
+        name="browser.navigate",
+        arguments={"url": candidate.target_url},
+    )
+
+
+def _deterministic_resource_collection_tool(
+    *,
+    task_text: str,
+    requested_resource_count: int | None,
+    resource_probe_target: int | None,
+    observation: PageObservation,
+    observed_resource_urls: set[str],
+    matched_resource_urls: set[str],
+    visited_target_urls: set[str],
+    prior_resource_urls: set[str],
+    available_tool_names: set[str],
+) -> ToolRequest | None:
+    if requested_resource_count is None or not observed_resource_urls:
+        return None
+    completed_count = _dominant_visited_resource_count(observed_resource_urls)
+    matched_count = _dominant_visited_resource_count(matched_resource_urls)
+    target_count = resource_probe_target or requested_resource_count
+    if matched_count >= requested_resource_count or completed_count >= target_count:
+        return None
+
+    preferred_shape = _preferred_resource_shape(observed_resource_urls, prior_resource_urls)
+    known_urls = {*visited_target_urls, *observed_resource_urls, *prior_resource_urls}
+    if (
+        preferred_shape is not None
+        and _url_resource_shape(str(observation.url or "")) == preferred_shape
+        and "browser.back" in available_tool_names
+    ):
+        return ToolRequest(name="browser.back", arguments={})
+    unvisited = _first_unvisited_resource_tool(
+        observation,
+        known_urls,
+        preferred_shape=preferred_shape,
+    )
+    if unvisited is not None:
+        return unvisited
+    return None
+
+
+def _incomplete_qualified_answer_recovery_tool(
+    *,
+    task_text: str,
+    answer: str,
+    requested_resource_count: int | None,
+    resource_probe_target: int | None,
+    observation: PageObservation,
+    observed_resource_urls: set[str],
+    visited_target_urls: set[str],
+    available_tool_names: set[str],
+) -> ToolRequest | None:
+    if (
+        requested_resource_count is None
+        or resource_probe_target is None
+        or not _task_requires_qualified_resources(task_text)
+    ):
+        return None
+    if _answer_observed_resource_count(answer, observed_resource_urls) >= requested_resource_count:
+        return None
+    if _dominant_visited_resource_count(observed_resource_urls) >= resource_probe_target:
+        return None
+
+    known_resource_urls = {*visited_target_urls, *observed_resource_urls}
+    unvisited = _first_unvisited_resource_tool(
+        observation,
+        known_resource_urls,
+        preferred_shape=_dominant_resource_shape(observed_resource_urls),
+    )
+    if unvisited is not None:
+        return unvisited
+    if (
+        observation.url
+        and _url_resource_shape(observation.url) is not None
+        and "browser.back" in available_tool_names
+    ):
+        return ToolRequest(name="browser.back", arguments={})
+    return None
+
+
+def _answer_observed_resource_count(
+    answer: str,
+    observed_resource_urls: set[str],
+) -> int:
+    observed_identities = {
+        _target_identity(url)
+        for url in observed_resource_urls
+        if _url_resource_shape(url) is not None
+    }
+    answer_identities = {
+        _target_identity(url.rstrip(".,;:)]}"))
+        for url in re.findall(r"https?://[^\s<>\"']+", answer)
+    }
+    return len(observed_identities & answer_identities)
+
+
+def _semantic_failure_recovery_tool(
+    *,
+    task_text: str,
+    request: ToolRequest,
+    result: ToolExecutionResult,
+    observation: PageObservation,
+    visited_target_urls: set[str],
+) -> ToolRequest | None:
+    """Recover failed semantic selection from a visible list of concrete resources."""
+
+    if result.success or _requested_distinct_resource_count(task_text) is None:
+        return None
+    if request.name not in {
+        "browser.resolve_target",
+        "browser.click_by_intent",
+        "browser.click",
+    }:
+        return None
+
+    candidates = [
+        element
+        for element in observation.interactive_elements
+        if element.role == "link"
+        and element.target_url
+        and _url_resource_shape(element.target_url) is not None
+        and not _target_was_visited(element.target_url, visited_target_urls)
+        and _target_identity(element.target_url) != _target_identity(observation.url)
+    ]
+    shape_counts = Counter(
+        shape
+        for shape in (_url_resource_shape(element.target_url or "") for element in candidates)
+        if shape is not None
+    )
+    if not shape_counts:
+        return None
+    dominant_shape, candidate_count = shape_counts.most_common(1)[0]
+    if candidate_count < 2:
+        return None
+    candidate = next(
+        element
+        for element in candidates
+        if _url_resource_shape(element.target_url or "") == dominant_shape
+    )
+    return ToolRequest(
+        name="browser.navigate",
+        arguments={"url": str(candidate.target_url)},
+    )
+
+
 def _alternative_unvisited_target_tool(
     observation: PageObservation,
     request: ToolRequest,
@@ -1929,7 +2698,7 @@ def _alternative_unvisited_target_tool(
             name="browser.click",
             arguments={"element_id": candidate.element_id},
         )
-    if request.name == "browser.navigate":
+    if request.name in {"browser.navigate", "browser.click_by_intent"}:
         return ToolRequest(
             name="browser.navigate",
             arguments={"url": candidate.target_url},
@@ -1951,6 +2720,45 @@ def _url_resource_shape(url: str) -> tuple[str, str, str] | None:
     if shaped_path == path:
         return None
     return parsed.scheme.casefold(), parsed.netloc.casefold(), shaped_path.casefold()
+
+
+def _dominant_interactive_resource_shape(
+    observation: PageObservation,
+) -> tuple[str, str, str] | None:
+    shapes = [
+        shape
+        for shape in (
+            _url_resource_shape(element.target_url or "")
+            for element in observation.interactive_elements
+            if element.role == "link"
+        )
+        if shape is not None
+    ]
+    if not shapes:
+        return None
+    return Counter(shapes).most_common(1)[0][0]
+
+
+def _tool_request_signature(request: ToolRequest) -> str:
+    """Hash a tool request so repeated actions can be blocked without logging values."""
+
+    normalized_arguments = tuple(
+        sorted(
+            (str(key), _stable_signature_value(value)) for key, value in request.arguments.items()
+        )
+    )
+    payload = repr((request.name, normalized_arguments)).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
+def _stable_signature_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return tuple(
+            sorted((str(key), _stable_signature_value(item)) for key, item in value.items())
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_stable_signature_value(item) for item in value)
+    return value
 
 
 def _target_was_visited(url: str, visited_target_urls: set[str]) -> bool:
@@ -2041,20 +2849,79 @@ def _requested_distinct_resource_count(task_text: str) -> int | None:
     return None
 
 
+def _task_has_hard_numeric_filter(task_text: str) -> bool:
+    normalized = " ".join(task_text.casefold().split())
+    return bool(
+        re.search(
+            r"(?:до|от|не\s+выше|не\s+ниже|не\s+более|не\s+менее|"
+            r"up\s+to|at\s+most|at\s+least|under|over|more\s+than|less\s+than)"
+            r"\s*(?:[$€£₽]\s*)?\d",
+            normalized,
+        )
+    )
+
+
+_QUALIFIED_RESOURCE_TERMS = (
+    "salary",
+    "pay range",
+    "experience",
+    "work format",
+    "technology",
+    "technologies",
+    "requirements",
+    "employer",
+    "exclude",
+    "must have",
+    "зарплат",
+    "доход",
+    "опыт",
+    "формат работ",
+    "технолог",
+    "требован",
+    "работодател",
+    "исключ",
+    "обязательн",
+    "явно указан",
+)
+
+
+def _task_requires_qualified_resources(task_text: str) -> bool:
+    normalized = " ".join(task_text.casefold().split())
+    return _task_has_hard_numeric_filter(task_text) or any(
+        term in normalized for term in _QUALIFIED_RESOURCE_TERMS
+    )
+
+
+def _qualified_resource_probe_target(
+    task_text: str,
+    requested_resource_count: int | None,
+) -> int | None:
+    if requested_resource_count is None or not _task_requires_qualified_resources(task_text):
+        return None
+    return min(requested_resource_count + 2, 8)
+
+
 def _count_followed_by_resource_term(text: str, count_end: int) -> bool:
     tail = text[count_end : count_end + 48]
     return any(term in tail for term in _RESOURCE_COUNT_NOUN_TERMS)
 
 
-def _dominant_visited_resource_count(visited_target_urls: set[str]) -> int:
+def _dominant_resource_shape(
+    resource_urls: set[str],
+) -> tuple[str, str, str] | None:
     shapes = [
-        shape
-        for shape in (_url_resource_shape(url) for url in visited_target_urls)
-        if shape is not None
+        shape for shape in (_url_resource_shape(url) for url in resource_urls) if shape is not None
     ]
     if not shapes:
+        return None
+    return Counter(shapes).most_common(1)[0][0]
+
+
+def _dominant_visited_resource_count(visited_target_urls: set[str]) -> int:
+    dominant_shape = _dominant_resource_shape(visited_target_urls)
+    if dominant_shape is None:
         return 0
-    return max(Counter(shapes).values())
+    return sum(_url_resource_shape(url) == dominant_shape for url in visited_target_urls)
 
 
 _RESOURCE_EVIDENCE_TERMS = (
@@ -2126,6 +2993,177 @@ def _resource_observation_has_evidence(observation: PageObservation) -> bool:
         if len(" ".join(section.text.split())) >= 20
     )
     return len(meaningful_text) >= 20
+
+
+_COMPENSATION_TASK_TERMS = (
+    "salary",
+    "pay range",
+    "compensation",
+    "income",
+    "зарплат",
+    "доход",
+    "оплат",
+)
+_COMPENSATION_VALUE_PATTERN = re.compile(
+    r"(?:\d[\d\s.,]{1,14}\s*(?:₽|руб(?:\.|\b|л)|rub\b|usd\b|eur\b|"
+    r"доллар|евро|[$€£])|"
+    r"(?:₽|[$€£]|rub\b|usd\b|eur\b)\s*\d[\d\s.,]{1,14})",
+    re.IGNORECASE,
+)
+_COMPENSATION_MISSING_PATTERN = re.compile(
+    r"(?:salary|pay|compensation|зарплата|доход)\s*(?:is\s*)?"
+    r"(?:not specified|not provided|не указан|не указана)",
+    re.IGNORECASE,
+)
+_MONEY_CURRENCY_PATTERN = (
+    r"(?P<currency>₽|р(?:уб(?:\.|\b|ля|лей)?|\.)|rub\b|usd\b|eur\b|"
+    r"доллар(?:а|ов)?|евро|[$€£])"
+)
+_MONEY_RANGE_PATTERN = re.compile(
+    rf"(?P<lower>\d[\d\s.,]{{0,14}})\s*(?:[-–—]|до)\s*"
+    rf"(?P<upper>\d[\d\s.,]{{0,14}})\s*(?P<multiplier>тыс\.?)?\s*"
+    rf"{_MONEY_CURRENCY_PATTERN}",
+    re.IGNORECASE,
+)
+_MONEY_DIRECTION_PATTERN = re.compile(
+    rf"(?P<direction>от|до|from|up\s+to|at\s+least|at\s+most|minimum|maximum)\s*"
+    rf"(?P<amount>\d[\d\s.,]{{0,14}})\s*(?P<multiplier>тыс\.?)?\s*"
+    rf"{_MONEY_CURRENCY_PATTERN}",
+    re.IGNORECASE,
+)
+_MONEY_EXACT_PATTERN = re.compile(
+    rf"(?P<amount>\d[\d\s.,]{{0,14}})\s*(?P<multiplier>тыс\.?)?\s*"
+    rf"{_MONEY_CURRENCY_PATTERN}",
+    re.IGNORECASE,
+)
+
+
+def _resource_observation_matches_explicit_evidence(
+    task_text: str,
+    observation: PageObservation,
+) -> bool:
+    """Count a resource as matching only when required visible facts are present."""
+
+    normalized_task = " ".join(task_text.casefold().split())
+    if not any(term in normalized_task for term in _COMPENSATION_TASK_TERMS):
+        return True
+
+    parts = [observation.title or "", observation.summary]
+    parts.extend(
+        f"{section.heading or ''} {section.text}"
+        for section in observation.sections
+        if section.role.casefold() not in {"banner", "contentinfo", "footer", "navigation"}
+    )
+    visible_content = " ".join(" ".join(part.split()) for part in parts if part)
+    if _COMPENSATION_MISSING_PATTERN.search(visible_content):
+        return False
+    if _COMPENSATION_VALUE_PATTERN.search(visible_content) is None:
+        return False
+
+    lower_bound, upper_bound, task_currency = _task_compensation_constraints(task_text)
+    if lower_bound is None and upper_bound is None:
+        return True
+    return any(
+        (task_currency is None or currency == task_currency)
+        and (lower_bound is None or offer_lower is not None and offer_lower >= lower_bound)
+        and (upper_bound is None or offer_upper is not None and offer_upper <= upper_bound)
+        for offer_lower, offer_upper, currency in _visible_compensation_ranges(visible_content)
+    )
+
+
+def _task_compensation_constraints(
+    task_text: str,
+) -> tuple[int | None, int | None, str | None]:
+    upper_values = [
+        _money_number(match.group("number"))
+        for match in _UPPER_BOUND_CLAUSE_PATTERN.finditer(task_text)
+        if _is_compensation_clause(match.group(0))
+    ]
+    lower_values = [
+        _money_number(match.group("number"))
+        for match in _LOWER_BOUND_CLAUSE_PATTERN.finditer(task_text)
+        if _is_compensation_clause(match.group(0))
+    ]
+    upper_values = [value for value in upper_values if value is not None]
+    lower_values = [value for value in lower_values if value is not None]
+    return (
+        max(lower_values) if lower_values else None,
+        min(upper_values) if upper_values else None,
+        _money_currency(task_text),
+    )
+
+
+def _is_compensation_clause(text: str) -> bool:
+    normalized = text.casefold()
+    return any(term in normalized for term in _COMPENSATION_TASK_TERMS) or (
+        _money_currency(text) is not None
+    )
+
+
+def _visible_compensation_ranges(
+    text: str,
+) -> tuple[tuple[int | None, int | None, str], ...]:
+    ranges: list[tuple[int | None, int | None, str]] = []
+    occupied: list[tuple[int, int]] = []
+
+    for match in _MONEY_RANGE_PATTERN.finditer(text):
+        multiplier = match.group("multiplier")
+        lower = _money_number(match.group("lower"), multiplier)
+        upper = _money_number(match.group("upper"), multiplier)
+        currency = _money_currency(match.group("currency"))
+        if lower is not None and upper is not None and currency is not None:
+            ranges.append((min(lower, upper), max(lower, upper), currency))
+            occupied.append(match.span())
+
+    for match in _MONEY_DIRECTION_PATTERN.finditer(text):
+        if _span_overlaps(match.span(), occupied):
+            continue
+        amount = _money_number(match.group("amount"), match.group("multiplier"))
+        currency = _money_currency(match.group("currency"))
+        if amount is None or currency is None:
+            continue
+        direction = match.group("direction").casefold()
+        if direction in {"от", "from", "at least", "minimum"}:
+            ranges.append((amount, None, currency))
+        else:
+            ranges.append((None, amount, currency))
+        occupied.append(match.span())
+
+    for match in _MONEY_EXACT_PATTERN.finditer(text):
+        if _span_overlaps(match.span(), occupied):
+            continue
+        amount = _money_number(match.group("amount"), match.group("multiplier"))
+        currency = _money_currency(match.group("currency"))
+        if amount is not None and currency is not None:
+            ranges.append((amount, amount, currency))
+    return tuple(ranges)
+
+
+def _money_number(value: str, multiplier: str | None = None) -> int | None:
+    digits = _digits_only(value)
+    if not digits:
+        return None
+    amount = int(digits)
+    if multiplier and amount < 10_000:
+        amount *= 1_000
+    return amount
+
+
+def _money_currency(text: str) -> str | None:
+    normalized = text.casefold()
+    if re.search(r"(?:₽|руб|\brub\b|р(?:\.|\b))", normalized):
+        return "RUB"
+    if re.search(r"(?:\$|\busd\b|доллар)", normalized):
+        return "USD"
+    if re.search(r"(?:€|\beur\b|евро)", normalized):
+        return "EUR"
+    if "£" in normalized:
+        return "GBP"
+    return None
+
+
+def _span_overlaps(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
+    return any(span[0] < end and start < span[1] for start, end in occupied)
 
 
 def _has_useful_page_content(observation: PageObservation) -> bool:
@@ -2202,6 +3240,19 @@ def _result_details(result: AgentTaskResult) -> Mapping[str, object]:
     return details
 
 
+def _run_evidence_details(
+    observed_resource_urls: set[str],
+    visited_target_urls: set[str],
+    repeated_target_preventions: int,
+) -> Mapping[str, object]:
+    return {
+        "observed_resource_count": _dominant_visited_resource_count(observed_resource_urls),
+        "observed_resource_urls": sorted(observed_resource_urls),
+        "visited_target_count": len({_target_identity(url) for url in visited_target_urls}),
+        "repeated_target_preventions": repeated_target_preventions,
+    }
+
+
 def _provider_error_details(error: LlmProviderError | None) -> Mapping[str, object] | None:
     if error is None:
         return None
@@ -2236,6 +3287,11 @@ def _user_message_ru_for_result(result: AgentTaskResult) -> str:
             "Проверьте настройки провайдера, ключи доступа и сеть, затем повторите задачу."
         )
     if result.termination_reason is TaskTerminationReason.PAGE_BLOCKER:
+        if "browser observation" in (result.message or "").casefold():
+            return (
+                "Связь с браузером потеряна. Текущая задача остановлена без новых действий; "
+                "перед продолжением требуется перезапуск браузерной сессии."
+            )
         return (
             "На странице обнаружен блокер: CAPTCHA, login wall, региональный запрос, модальное окно или похожее препятствие. "
             "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
@@ -2313,9 +3369,7 @@ def _redact_tool_arguments(
     schemas: Sequence[ToolSchema],
 ) -> Mapping[str, object]:
     schema = next((schema for schema in schemas if schema.name == request.name), None)
-    sensitive_fields = (
-        schema.input_schema.sensitive_field_names() if schema is not None else set()
-    )
+    sensitive_fields = schema.input_schema.sensitive_field_names() if schema is not None else set()
     redacted: dict[str, object] = {}
     for key, value in request.arguments.items():
         normalized = key.casefold()

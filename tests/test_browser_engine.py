@@ -1,6 +1,7 @@
 import asyncio
 
 from scout_pilot.browser import BrowserEngineConfig, PlaywrightBrowserEngine
+from scout_pilot.browser.types import BrowserSessionInfo
 from scout_pilot.observation import SemanticObservationEngine
 
 
@@ -79,6 +80,35 @@ def test_browser_actions_before_start_are_structured_failures(tmp_path):
     asyncio.run(scenario())
 
 
+def test_semantic_snapshot_reports_closed_driver_without_raising(tmp_path):
+    class DisconnectedLocator:
+        async def evaluate(self, script, arguments):
+            raise Exception("Connection closed while reading from the driver")
+
+    class DisconnectedPage:
+        url = "https://example.test/results"
+
+        def is_closed(self):
+            return False
+
+        def locator(self, selector):
+            return DisconnectedLocator()
+
+        async def title(self):
+            raise Exception("Connection closed while reading from the driver")
+
+    settings = BrowserEngineConfig(user_data_dir=tmp_path / "profile", headless=True)
+    engine = PlaywrightBrowserEngine(settings)
+    engine._page = DisconnectedPage()
+    engine._session = BrowserSessionInfo.create(settings)
+
+    snapshot = asyncio.run(engine.capture_semantic_snapshot())
+
+    assert snapshot.is_visible is False
+    assert "browser_disconnected" in snapshot.issues
+    assert "observation_error" in snapshot.issues
+
+
 def test_browser_stop_attempts_playwright_cleanup_after_context_close_error(tmp_path):
     settings = BrowserEngineConfig(user_data_dir=tmp_path / "profile", headless=True)
     engine = PlaywrightBrowserEngine(settings)
@@ -147,11 +177,7 @@ def test_browser_dismisses_unexpected_dialog_and_reports_signal(tmp_path):
 
 
 def test_browser_engine_public_api_does_not_expose_raw_playwright_objects():
-    public_names = {
-        name
-        for name in dir(PlaywrightBrowserEngine)
-        if not name.startswith("_")
-    }
+    public_names = {name for name in dir(PlaywrightBrowserEngine) if not name.startswith("_")}
 
     assert "page" not in public_names
     assert "context" not in public_names

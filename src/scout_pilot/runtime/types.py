@@ -48,10 +48,11 @@ class RuntimeSettings:
     """Runtime loop limits."""
 
     max_iterations: int = DEFAULT_MAX_AGENT_STEPS
-    max_failures: int = 5
-    max_repeated_targets: int = 6
+    max_failures: int = 12
+    max_repeated_targets: int = 12
+    max_search_reformulations: int = 2
     max_memory_summaries: int = 10
-    max_elapsed_seconds: float = 240.0
+    max_elapsed_seconds: float = 600.0
 
 
 @dataclass(frozen=True)

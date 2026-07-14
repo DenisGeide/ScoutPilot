@@ -20,6 +20,9 @@ from scout_pilot.runtime.types import DEFAULT_MAX_AGENT_STEPS
 
 _TERMINAL_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _ANSI_BLUE = "\x1b[94m"
+_ANSI_CYAN = "\x1b[96m"
+_ANSI_YELLOW = "\x1b[93m"
+_ANSI_BOLD = "\x1b[1m"
 _ANSI_RESET = "\x1b[0m"
 _OSC_LINK_END = "\x1b]8;;\x1b\\"
 
@@ -583,7 +586,7 @@ def _print_status(config: AppConfig) -> None:
         "Security Policy, Universal Semantic Navigation и слой demo/reporting."
     )
     print(
-        "Live-режим запускается через scout-pilot run \"текст задачи\" --live "
+        'Live-режим запускается через scout-pilot run "текст задачи" --live '
         "--start-url <URL>. Для детерминированной проверки используйте --provider mock."
     )
     print("Удобный режим без длинных команд доступен через scout-pilot menu.")
@@ -594,7 +597,7 @@ def _print_status(config: AppConfig) -> None:
     print("Сводка report/replay доступна через scout-pilot replay-summary <path>.")
     print("Проверка локальной среды доступна через scout-pilot doctor.")
     print("Persistent profile можно проверить через scout-pilot profile-info и profile-open.")
-    print("Безопасный сухой запуск: scout-pilot run \"текст задачи\" --dry-run.")
+    print('Безопасный сухой запуск: scout-pilot run "текст задачи" --dry-run.')
     print("Ручная проверка LLM: scout-pilot provider-smoke --provider openai|anthropic.")
     print("Интерактивный режим доступен через scout-pilot interactive.")
     print(f"Среда: {config.environment}. Профиль браузера: {config.browser_profile_dir}.")
@@ -682,7 +685,7 @@ async def _menu_run_agent(args: argparse.Namespace) -> int:
     )
     start_url = _menu_prompt_start_url()
     provider = _menu_fast_provider(args, start_url)
-    print(f"Провайдер: {provider}. Лимит шагов агента на задачу: {args.max_iterations}.")
+    print(f"Провайдер: {provider}. Лимит на задачу: {args.max_iterations} шагов и 4 минуты.")
     return await _menu_chat_session(
         args,
         start_url=start_url,
@@ -699,9 +702,7 @@ def _menu_task_help() -> None:
 
 def _menu_prompt_start_url() -> str:
     while True:
-        raw_url = _menu_read(
-            "URL сайта (Enter - https://hh.ru): "
-        ).strip()
+        raw_url = _menu_read("URL сайта (Enter - https://hh.ru): ").strip()
         if not raw_url:
             raw_url = "https://hh.ru"
         start_url, error = _normalize_menu_start_url(raw_url)
@@ -791,10 +792,20 @@ async def _menu_chat_session(
     last_report: Path | None = None
     last_replay: Path | None = None
     last_links: tuple[str, ...] = ()
+    conversation_memory: list[str] = []
+    selected_result: tuple[str, str] | None = None
 
     try:
+        profile_existed = browser_settings.user_data_dir.exists()
         print("Открываю браузер...")
-        await browser.start()
+        session = await browser.start()
+        profile_state = "повторно используется" if profile_existed else "создан"
+        print(
+            "Persistent profile: "
+            f"{session.user_data_dir.as_posix()} ({profile_state}, данные остаются локально)."
+        )
+        browser_mode = "без окна (headless)" if browser_settings.headless else "видимый (headed)"
+        print(f"Режим браузера: {browser_mode}.")
         navigation = await tool_runtime.execute(ToolRequest("browser.navigate", {"url": start_url}))
         if not navigation.success:
             print(f"Не удалось открыть сайт: {navigation.message}")
@@ -807,13 +818,15 @@ async def _menu_chat_session(
         _menu_task_help()
 
         while True:
-            task_text = _menu_read("\nВы > ").strip()
+            task_text = _menu_read("\n" + _format_chat_prompt("Вы > ")).strip()
             normalized = task_text.casefold()
             if normalized in {"", "help", "/help", "?"}:
                 _menu_task_help()
                 continue
             if normalized in {"9", "exit", "quit", "/exit", "выход"}:
-                print("Останавливаю режим. Сейчас закрою браузер и сохраненные сессии останутся в profile.")
+                print(
+                    "Останавливаю режим. Сейчас закрою браузер и сохраненные сессии останутся в profile."
+                )
                 return 0
             if normalized == "/debug":
                 debug_output = not debug_output
@@ -824,14 +837,21 @@ async def _menu_chat_session(
                 if last_replay is None and last_report is None:
                     print("Отчета пока нет: сначала выполните задачу.")
                 else:
-                    _run_replay_summary(
-                        argparse.Namespace(path=str(last_replay or last_report))
-                    )
+                    _run_replay_summary(argparse.Namespace(path=str(last_replay or last_report)))
                 continue
             if normalized == "/open" or normalized.startswith("/open "):
                 link_index, error = _parse_open_link_command(task_text, len(last_links))
                 if error is not None:
                     print(error)
+                    continue
+                browser_ready, browser_message = await _ensure_menu_browser_available(
+                    browser=browser,
+                    tool_runtime=tool_runtime,
+                    start_url=start_url,
+                )
+                if browser_message:
+                    print(browser_message)
+                if not browser_ready:
                     continue
                 target_url = last_links[link_index - 1]
                 print(
@@ -845,6 +865,15 @@ async def _menu_chat_session(
                 continue
             if normalized == "/url":
                 start_url = _menu_prompt_start_url()
+                browser_ready, browser_message = await _ensure_menu_browser_available(
+                    browser=browser,
+                    tool_runtime=tool_runtime,
+                    start_url=start_url,
+                )
+                if browser_message:
+                    print(browser_message)
+                if not browser_ready:
+                    continue
                 navigation = await tool_runtime.execute(
                     ToolRequest("browser.navigate", {"url": start_url})
                 )
@@ -854,6 +883,27 @@ async def _menu_chat_session(
                 else:
                     print(f"Не удалось открыть сайт: {navigation.message}")
                 continue
+
+            browser_ready, browser_message = await _ensure_menu_browser_available(
+                browser=browser,
+                tool_runtime=tool_runtime,
+                start_url=start_url,
+            )
+            if browser_message:
+                print(browser_message)
+            if not browser_ready:
+                print("Задача не запущена: браузер сейчас недоступен.")
+                continue
+
+            if selected_result is not None and _task_references_previous_selection(task_text):
+                selected_label, selected_url = selected_result
+                selection_message = await _open_previous_selected_result(
+                    label=selected_label,
+                    target_url=selected_url,
+                    tool_runtime=tool_runtime,
+                    browser=browser,
+                )
+                print(selection_message)
 
             result = await _menu_chat_run_task(
                 task_text=task_text,
@@ -866,10 +916,18 @@ async def _menu_chat_session(
                 tool_schemas=tool_schemas,
                 max_iterations=args.max_iterations,
                 debug_output=debug_output,
+                initial_memory_summaries=tuple(conversation_memory),
             )
             last_report = result["report_path"]
             last_replay = result["replay_path"]
             last_links = tuple(result.get("links", ()))
+            final_message = str(result.get("final_message") or "").strip()
+            if final_message:
+                conversation_memory.extend(_chat_turn_memory_summaries(task_text, final_message))
+                conversation_memory = conversation_memory[-6:]
+                extracted_selection = _extract_selected_result_reference(final_message)
+                if extracted_selection is not None:
+                    selected_result = extracted_selection
             if result["success"]:
                 print("Можно написать следующую задачу.")
             else:
@@ -891,6 +949,7 @@ async def _menu_chat_run_task(
     tool_schemas: tuple[object, ...],
     max_iterations: int,
     debug_output: bool,
+    initial_memory_summaries: tuple[str, ...] = (),
 ) -> dict[str, object]:
     from scout_pilot.cli.dashboard import RuntimeDashboard
     from scout_pilot.cli.task_session import (
@@ -946,7 +1005,12 @@ async def _menu_chat_run_task(
         tool_runtime=tool_runtime,
         memory=memory,
         tool_schemas=tool_schemas,
-        settings=RuntimeSettings(max_iterations=max_iterations),
+        settings=RuntimeSettings(
+            max_iterations=max_iterations,
+            max_elapsed_seconds=240.0,
+            max_repeated_targets=4,
+            max_search_reformulations=1,
+        ),
         security_constraints=(
             "Перед отправкой форм, откликами, сообщениями, покупками, загрузкой файлов "
             "или удалением данных нужно явное подтверждение пользователя."
@@ -954,21 +1018,27 @@ async def _menu_chat_run_task(
         confirmation_constraints=(
             "Никогда не продолжай автоматически после confirmation_required.",
         ),
+        initial_memory_summaries=initial_memory_summaries,
         budget={"remaining_tokens": config.max_context_tokens},
     )
 
-    print("Агент: понял задачу, смотрю текущую страницу.")
+    status_line = _ChatStatusLine()
+    status_line.update("понял задачу, смотрю текущую страницу.")
     success = False
     final_message = "Задача остановлена до результата."
+    last_context_metrics: dict[str, object] = {}
     try:
         while True:
             async for event in runtime.run(UserTask(task_text)):
+                if event.name == "context_budget_applied":
+                    last_context_metrics = dict(event.details.get("metrics") or {})
                 _menu_record_chat_event(
                     settings,
                     dashboard,
                     recorder,
                     event,
                     debug_output=debug_output,
+                    status_line=status_line,
                 )
 
             if not _can_resume_after_confirmation(runtime):
@@ -977,10 +1047,11 @@ async def _menu_chat_run_task(
             confirmation = runtime.pending_confirmation
             if confirmation is None:
                 break
+            status_line.clear()
             if _ask_user_confirmation(confirmation, print):
                 confirmation_id = str(confirmation.get("confirmation_id") or "")
                 if runtime.confirm_pending_action(confirmation_id):
-                    print("Агент: подтверждение принято, выполняю только это действие.")
+                    status_line.update("подтверждение принято, выполняю только это действие.")
                     continue
             confirmation_id = str(confirmation.get("confirmation_id") or "")
             if confirmation_id:
@@ -991,13 +1062,16 @@ async def _menu_chat_run_task(
                 report_path=paths.report_path,
                 replay_path=paths.replay_path,
             )
-            print(f"Агент: {final_message}")
+            status_line.clear()
+            _print_chat_agent(final_message)
+            _print_chat_run_evidence(runtime, last_context_metrics)
             print(f"Отчет: {artifacts.report_path}")
             return {
                 "success": False,
                 "report_path": artifacts.report_path,
                 "replay_path": artifacts.replay_path,
                 "links": (),
+                "final_message": final_message,
             }
 
         if runtime.last_result is None:
@@ -1006,7 +1080,10 @@ async def _menu_chat_run_task(
         else:
             success = runtime.last_result.success
             final_message = _result_message_ru(runtime.last_result)
-            if runtime.last_result.termination_reason is TaskTerminationReason.WAITING_FOR_CONFIRMATION:
+            if (
+                runtime.last_result.termination_reason
+                is TaskTerminationReason.WAITING_FOR_CONFIRMATION
+            ):
                 success = False
         recorder.finalize(
             success=success,
@@ -1017,14 +1094,16 @@ async def _menu_chat_run_task(
             report_path=paths.report_path,
             replay_path=paths.replay_path,
         )
-        print("")
+        status_line.clear()
         _print_agent_final_message(final_message)
+        _print_chat_run_evidence(runtime, last_context_metrics)
         print(f"Отчет: {artifacts.report_path}")
         return {
             "success": success,
             "report_path": artifacts.report_path,
             "replay_path": artifacts.replay_path,
             "links": _extract_terminal_links(final_message),
+            "final_message": final_message,
         }
     except Exception as exc:
         final_message = (
@@ -1036,23 +1115,188 @@ async def _menu_chat_run_task(
             report_path=paths.report_path,
             replay_path=paths.replay_path,
         )
-        print(f"Агент: {final_message}")
+        status_line.clear()
+        _print_chat_agent(final_message)
+        _print_chat_run_evidence(runtime, last_context_metrics)
         print(f"Отчет: {artifacts.report_path}")
         return {
             "success": False,
             "report_path": artifacts.report_path,
             "replay_path": artifacts.replay_path,
             "links": (),
+            "final_message": final_message,
         }
 
 
 def _print_agent_final_message(message: str) -> None:
-    print(f"Агент: {_format_terminal_links(message)}")
+    _print_chat_agent(message)
+
+
+def _print_chat_agent(message: str) -> None:
+    print(_format_chat_line("Агент", _format_terminal_links(message)))
+
+
+def _print_chat_run_evidence(
+    runtime: object,
+    context_metrics: dict[str, object],
+) -> None:
+    if context_metrics:
+        before = int(context_metrics.get("before_tokens") or 0)
+        after = int(context_metrics.get("after_tokens") or 0)
+        kept_sections = int(context_metrics.get("observation_sections_kept") or 0)
+        all_sections = int(context_metrics.get("observation_sections_before") or 0)
+        kept_memory = int(context_metrics.get("memory_summaries_kept") or 0)
+        all_memory = int(context_metrics.get("memory_summaries_before") or 0)
+        emergency = "да" if context_metrics.get("emergency_compression_applied") is True else "нет"
+        print(
+            "Контекст: "
+            f"{before} -> {after} токенов; разделы {kept_sections}/{all_sections}; "
+            f"память {kept_memory}/{all_memory}; экстренное сжатие: {emergency}."
+        )
+
+    resource_urls = tuple(getattr(runtime, "last_observed_resource_urls", ()))
+    prevented = int(getattr(runtime, "last_repeated_target_preventions", 0) or 0)
+    if resource_urls:
+        print(
+            "Страницы в контексте задачи: "
+            f"{len(resource_urls)}; "
+            f"повторных переходов предотвращено {prevented}."
+        )
+
+
+def _chat_turn_memory_summaries(task: str, answer: str) -> tuple[str, ...]:
+    from scout_pilot.reporting import sanitize_for_report
+
+    safe_task = str(sanitize_for_report(task))
+    summaries = [f"Previous conversation task: {safe_task}"]
+    for index in range(0, min(len(answer), 3600), 900):
+        chunk = str(sanitize_for_report(answer[index : index + 900]))
+        summaries.append(f"Previous conversation answer: {chunk}")
+    selected = _extract_selected_result_reference(answer)
+    if selected is not None:
+        label, target_url = selected
+        summaries.append(
+            "Previous conversation selected result: "
+            f"label={label}; exact_url={target_url}. Resolve follow-up references to this URL."
+        )
+    return tuple(summaries)
+
+
+def _extract_selected_result_reference(answer: str) -> tuple[str, str] | None:
+    marker_patterns = (
+        r"(?im)^\s*лучший\s+(?:вариант|результат|вакансия)\s*[—:-]\s*(?P<label>[^:\n.]{2,180})",
+        r"(?im)^\s*(?:выбранный|выбранная)\s+(?:вариант|результат|вакансия)\s*[—:-]\s*(?P<label>[^:\n.]{2,180})",
+        r"(?im)^\s*best\s+(?:option|result|match)\s*[—:-]\s*(?P<label>[^:\n.]{2,180})",
+    )
+    marker = next(
+        (match for pattern in marker_patterns if (match := re.search(pattern, answer)) is not None),
+        None,
+    )
+    if marker is None:
+        return None
+    label = " ".join(marker.group("label").split()).strip(" —:-")
+    label_tokens = _selection_tokens(label)
+    if not label_tokens:
+        return None
+
+    url_matches = list(_TERMINAL_URL_RE.finditer(answer))
+    scored: list[tuple[int, str]] = []
+    previous_end = 0
+    for url_match in url_matches:
+        context_start = max(previous_end, url_match.start() - 900)
+        context = answer[context_start : url_match.start()]
+        score = len(label_tokens & _selection_tokens(context))
+        raw_url = url_match.group().rstrip(".,;:)]}")
+        scored.append((score, raw_url))
+        previous_end = url_match.end()
+    if not scored:
+        return None
+    score, target_url = max(scored, key=lambda item: item[0])
+    if score == 0:
+        return None
+    return label, target_url
+
+
+def _selection_tokens(value: str) -> set[str]:
+    ignored = {"the", "and", "для", "или", "вариант", "вакансия", "результат"}
+    return {
+        token
+        for token in re.findall(r"[\w]+", value.casefold())
+        if len(token) >= 2 and token not in ignored
+    }
+
+
+def _task_references_previous_selection(task: str) -> bool:
+    normalized = task.casefold()
+    return any(
+        term in normalized
+        for term in (
+            "лучш",
+            "выбранн",
+            "победител",
+            "best",
+            "selected",
+            "winner",
+        )
+    )
+
+
+class _ChatStatusLine:
+    """Render transient chat progress on one terminal line."""
+
+    def __init__(self, stream: object | None = None, *, use_color: bool | None = None):
+        self._stream = stream or sys.stdout
+        isatty = getattr(self._stream, "isatty", None)
+        self._interactive = bool(callable(isatty) and isatty())
+        self._use_color = use_color
+        self._active = False
+        self.last_message = ""
+
+    def update(self, message: str) -> None:
+        self.last_message = message
+        if not self._interactive:
+            return
+        rendered = _format_chat_line("Агент", message, use_color=self._use_color)
+        write = getattr(self._stream, "write")
+        flush = getattr(self._stream, "flush")
+        write(f"\r\x1b[2K{rendered}")
+        flush()
+        self._active = True
+
+    def clear(self) -> None:
+        if not self._interactive or not self._active:
+            return
+        write = getattr(self._stream, "write")
+        flush = getattr(self._stream, "flush")
+        write("\r\x1b[2K")
+        flush()
+        self._active = False
+
+
+def _format_chat_prompt(prompt: str, *, use_color: bool | None = None) -> str:
+    enabled = _supports_terminal_colors() if use_color is None else use_color
+    if not enabled:
+        return prompt
+    return f"{_ANSI_BOLD}{_ANSI_YELLOW}{prompt}{_ANSI_RESET}"
+
+
+def _format_chat_line(
+    speaker: str,
+    message: str,
+    *,
+    use_color: bool | None = None,
+) -> str:
+    enabled = _supports_terminal_colors() if use_color is None else use_color
+    label = f"{speaker}:"
+    if enabled:
+        label = f"{_ANSI_BOLD}{_ANSI_CYAN}{label}{_ANSI_RESET}"
+    return f"{label} {message}"
 
 
 def _format_terminal_links(message: str, *, use_color: bool | None = None) -> str:
     """Keep exact links in artifacts while presenting concise terminal links."""
-    color_enabled = _supports_terminal_hyperlinks() if use_color is None else use_color
+    color_enabled = _supports_terminal_colors() if use_color is None else use_color
+    hyperlink_enabled = _supports_terminal_hyperlinks() if use_color is None else use_color
     links = _extract_terminal_links(message)
     link_numbers = {url: index for index, url in enumerate(links, start=1)}
 
@@ -1072,14 +1316,11 @@ def _format_terminal_links(message: str, *, use_color: bool | None = None) -> st
 
         rendered = display_url
         if color_enabled:
+            rendered = f"{_ANSI_BLUE}{display_url}{_ANSI_RESET}"
+        if hyperlink_enabled:
             link_start = f"\x1b]8;;{raw_url}\x1b\\"
-            rendered = (
-                f"{link_start}{_ANSI_BLUE}{display_url}{_ANSI_RESET}{_OSC_LINK_END}"
-            )
-        return (
-            f"[{link_number}] {rendered}  "
-            f"[Ctrl + клик или /open {link_number}]{trailing}"
-        )
+            rendered = f"{link_start}{rendered}{_OSC_LINK_END}"
+        return f"[{link_number}] {rendered}  [Ctrl + клик или /open {link_number}]{trailing}"
 
     return _TERMINAL_URL_RE.sub(replace_url, message)
 
@@ -1099,6 +1340,34 @@ def _supports_terminal_hyperlinks() -> bool:
     if sys.platform != "win32":
         return True
     return bool(os.environ.get("WT_SESSION"))
+
+
+def _supports_terminal_colors() -> bool:
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR") is not None:
+        return False
+    if sys.platform != "win32":
+        return os.environ.get("TERM", "").casefold() != "dumb"
+    return _enable_windows_virtual_terminal()
+
+
+def _enable_windows_virtual_terminal() -> bool:
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if handle in {0, -1} or not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        enable_virtual_terminal_processing = 0x0004
+        return bool(
+            kernel32.SetConsoleMode(
+                handle,
+                mode.value | enable_virtual_terminal_processing,
+            )
+        )
+    except (AttributeError, OSError):
+        return False
 
 
 def _parse_open_link_command(command: str, link_count: int) -> tuple[int, str | None]:
@@ -1122,13 +1391,78 @@ async def _open_menu_link(
 ) -> str:
     from scout_pilot.models import ToolRequest
 
-    navigation = await tool_runtime.execute(
-        ToolRequest("browser.navigate", {"url": target_url})
-    )
+    navigation = await tool_runtime.execute(ToolRequest("browser.navigate", {"url": target_url}))
     if not navigation.success:
         return f"Не удалось открыть ссылку {link_index}: {navigation.message}"
     state = await browser.current_state()
     return f"Открыл ссылку {link_index}: {state.title or target_url}"
+
+
+async def _open_previous_selected_result(
+    *,
+    label: str,
+    target_url: str,
+    tool_runtime: object,
+    browser: object,
+) -> str:
+    from scout_pilot.models import ToolRequest
+
+    state = await browser.current_state()
+    if _same_resource_url(str(state.url or ""), target_url):
+        return f"Ранее выбранный вариант уже открыт: {label}."
+    navigation = await tool_runtime.execute(ToolRequest("browser.navigate", {"url": target_url}))
+    if not navigation.success:
+        return (
+            f"Не удалось открыть ранее выбранный вариант «{label}». "
+            "Агент проверит текущую страницу и продолжит осторожно."
+        )
+    return f"Открыл ранее выбранный вариант: {label}."
+
+
+def _same_resource_url(left: str, right: str) -> bool:
+    left_url = urlparse(left)
+    right_url = urlparse(right)
+    return (
+        left_url.scheme.casefold(),
+        left_url.netloc.casefold(),
+        left_url.path.rstrip("/"),
+    ) == (
+        right_url.scheme.casefold(),
+        right_url.netloc.casefold(),
+        right_url.path.rstrip("/"),
+    )
+
+
+async def _ensure_menu_browser_available(
+    *,
+    browser: object,
+    tool_runtime: object,
+    start_url: str,
+) -> tuple[bool, str | None]:
+    """Restart a disconnected menu browser before accepting another task."""
+
+    from scout_pilot.models import ToolRequest
+
+    state = await browser.current_state()
+    if state.is_started:
+        return True, None
+
+    try:
+        await browser.stop()
+        await browser.start()
+    except Exception:
+        return (
+            False,
+            "Не удалось перезапустить браузер. Закройте оставшиеся окна Chromium и повторите задачу.",
+        )
+
+    navigation = await tool_runtime.execute(ToolRequest("browser.navigate", {"url": start_url}))
+    if not navigation.success:
+        return (
+            False,
+            "Браузер перезапущен, но стартовую страницу открыть не удалось. Проверьте URL и сеть.",
+        )
+    return True, "Связь с браузером восстановлена. Стартовая страница открыта заново."
 
 
 def _menu_record_chat_event(
@@ -1138,6 +1472,7 @@ def _menu_record_chat_event(
     event: object,
     *,
     debug_output: bool,
+    status_line: _ChatStatusLine | None = None,
 ) -> None:
     from scout_pilot.cli.task_session import _event_with_trace
 
@@ -1145,7 +1480,10 @@ def _menu_record_chat_event(
     recorder.record_event(_event_with_trace(event, dashboard.trace()))
     message = _menu_chat_event_message(event, debug_output=debug_output)
     if message:
-        print(f"Агент: {message}")
+        if status_line is not None and not debug_output:
+            status_line.update(message)
+        else:
+            _print_chat_agent(message)
 
 
 def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
@@ -1158,7 +1496,24 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
         return f"вижу страницу: {title}." if title else "смотрю страницу."
     if name == "page_blocker_detected":
         if details.get("stop") is True:
-            return "на странице есть блокер; я не буду обходить CAPTCHA или автоматизировать вход."
+            blocker_type = str(details.get("blocker_type") or "")
+            return {
+                "captcha_blocking_page": (
+                    "сайт показал CAPTCHA; я не обхожу проверку и останавливаю задачу."
+                ),
+                "login_wall": (
+                    "сайт требует ручного входа; войдите в открытом браузере и повторите задачу."
+                ),
+                "blocked_page": (
+                    "сайт ограничил доступ; причина записана в отчет, задача остановлена."
+                ),
+                "browser_observation_error": (
+                    "связь с браузером потеряна; перезапустите сессию и повторите задачу."
+                ),
+            }.get(
+                blocker_type,
+                "на странице есть блокер; задача безопасно остановлена.",
+            )
         return "страница еще загружается или пока пуста; проверяю доступный контекст."
     if name == "modal_dismiss_started":
         return "закрываю всплывающее окно, не относящееся к задаче..."
@@ -1189,6 +1544,21 @@ def _menu_chat_event_message(event: object, *, debug_output: bool) -> str:
         return "эту страницу уже открывал; выбираю другую вакансию."
     if name == "repeated_target_remapped":
         return "эта ссылка уже прочитана; автоматически выбираю другой похожий результат."
+    if name == "search_reformulation_redirected":
+        return "поиск уже уточнен; открываю следующий непосещенный результат."
+    if name == "resource_collection_followup_selected":
+        return "перехожу к следующей непосещенной странице того же типа."
+    if name == "off_scope_resource_redirected":
+        return "пропускаю служебную ссылку; открываю следующий результат."
+    if name == "search_upper_bound_removed":
+        return "верхнюю границу проверю по карточкам; не применяю неоднозначный фильтр «от»."
+    if name == "incomplete_answer_collection_continued":
+        requested = details.get("requested_resource_count")
+        found = details.get("answer_resource_count")
+        return (
+            f"в ответе подтверждено {found} из {requested}; "
+            "продолжаю проверять непосещенные страницы."
+        )
     if name == "confirmation_required":
         return "останавливаюсь перед действием, которое требует подтверждения."
     return ""
@@ -1230,9 +1600,7 @@ def _menu_tool_done_ru(tool_name: str) -> str:
 
 
 async def _menu_run_live_local_demo(args: argparse.Namespace) -> int:
-    task = _menu_read(
-        "Задача demo (Enter - стандартная задача про AI Engineer вакансии): "
-    ).strip()
+    task = _menu_read("Задача demo (Enter - стандартная задача про AI Engineer вакансии): ").strip()
     if not task:
         task = _MENU_DEFAULT_TASK
     provider = _menu_choice(
@@ -1301,11 +1669,7 @@ def _latest_replay_path() -> Path | None:
     report_dir = config.reports_dir / "tmp"
     if not report_dir.exists():
         return None
-    candidates = [
-        path
-        for path in report_dir.rglob("*.json")
-        if "replay" in path.name.casefold()
-    ]
+    candidates = [path for path in report_dir.rglob("*.json") if "replay" in path.name.casefold()]
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
@@ -1327,11 +1691,7 @@ def _menu_demo_namespace(kind: str, args: argparse.Namespace) -> argparse.Namesp
 def _menu_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
     choices_text = "/".join(choices)
     while True:
-        value = (
-            _menu_read(f"{label} [{choices_text}] (Enter - {default}): ")
-            .strip()
-            .casefold()
-        )
+        value = _menu_read(f"{label} [{choices_text}] (Enter - {default}): ").strip().casefold()
         if not value:
             return default
         if value in choices:
@@ -1457,7 +1817,9 @@ def _run_profile_info(args: argparse.Namespace) -> int:
         "локальная история и состояние авторизации."
     )
     if profile.git_ignored is False:
-        print("Внимание: этот путь не закрыт .gitignore. Перед использованием добавьте его в ignore.")
+        print(
+            "Внимание: этот путь не закрыт .gitignore. Перед использованием добавьте его в ignore."
+        )
         return 1
     return 0
 
@@ -1495,7 +1857,9 @@ async def _run_profile_open(args: argparse.Namespace) -> int:
     engine = PlaywrightBrowserEngine(browser_settings)
     print(f"Открываю профиль: {profile.name}")
     print(f"Путь профиля: {profile.path.resolve()}")
-    print("Этот профиль локальный. Не коммитьте его и не экспортируйте storage state в репозиторий.")
+    print(
+        "Этот профиль локальный. Не коммитьте его и не экспортируйте storage state в репозиторий."
+    )
     try:
         await engine.start()
         result = await engine.navigate_to(args.start_url)
@@ -1506,7 +1870,9 @@ async def _run_profile_open(args: argparse.Namespace) -> int:
         if args.hold_seconds is not None:
             await asyncio.sleep(max(args.hold_seconds, 0))
             return 0
-        print("Войдите на сайт вручную. Затем закройте окно браузера или нажмите Enter в терминале.")
+        print(
+            "Войдите на сайт вручную. Затем закройте окно браузера или нажмите Enter в терминале."
+        )
         await _wait_for_enter_or_browser_close(engine)
         return 0
     except BrowserEngineError as exc:
@@ -1576,7 +1942,9 @@ async def _run_browser_smoke(args: argparse.Namespace) -> int:
         if args.url:
             result = await engine.navigate_to(args.url)
             if not result.success:
-                print(f"Не удалось открыть страницу: {_browser_action_message_ru(result.error_code)}")
+                print(
+                    f"Не удалось открыть страницу: {_browser_action_message_ru(result.error_code)}"
+                )
                 return 1
             print(f"Страница открыта: {result.title or result.url or args.url}")
         await asyncio.sleep(max(args.hold_seconds, 0))
@@ -1657,9 +2025,7 @@ async def _run_interview_demo(args: argparse.Namespace) -> int:
     settings = InterviewDemoSettings(
         site_dir=Path(args.site_dir) if args.site_dir else Path("reports/tmp/interview-demo-site"),
         profile_dir=(
-            Path(args.profile_dir)
-            if args.profile_dir
-            else Path(".browser-profiles/interview-demo")
+            Path(args.profile_dir) if args.profile_dir else Path(".browser-profiles/interview-demo")
         ),
         report_path=(
             Path(args.report_path)
@@ -1684,9 +2050,13 @@ async def _run_interview_demo(args: argparse.Namespace) -> int:
     print(result.message_ru)
     print(f"Отчет сохранен: {result.report_path}")
     print(f"Replay-файл сохранен: {result.replay_path}")
-    print(f"Прочитано страниц: {result.notes_count}. Пауз безопасности: {result.security_pause_count}.")
+    print(
+        f"Прочитано страниц: {result.notes_count}. Пауз безопасности: {result.security_pause_count}."
+    )
     if result.success:
-        print("Локальное демо для интервью завершено. Реальные отклики и сообщения не отправлялись.")
+        print(
+            "Локальное демо для интервью завершено. Реальные отклики и сообщения не отправлялись."
+        )
         return 0
     print("Демо остановилось. Проверьте отчет и replay, чтобы увидеть причину.")
     return 1
@@ -1703,9 +2073,7 @@ async def _run_live_local_demo(args: argparse.Namespace) -> int:
     task_text = " ".join(args.task).strip() or DEFAULT_LIVE_LOCAL_TASK
     settings = LiveLocalDemoSettings(
         site_dir=(
-            Path(args.site_dir)
-            if args.site_dir
-            else Path("reports/tmp/live-local-demo-site")
+            Path(args.site_dir) if args.site_dir else Path("reports/tmp/live-local-demo-site")
         ),
         profile_dir=(
             Path(args.profile_dir)
@@ -1743,7 +2111,9 @@ async def _run_live_local_demo(args: argparse.Namespace) -> int:
         f"Пауз безопасности: {result.security_pause_count}."
     )
     if result.success:
-        print("Live local demo завершено как ожидаемая безопасная остановка перед внешним действием.")
+        print(
+            "Live local demo завершено как ожидаемая безопасная остановка перед внешним действием."
+        )
         return 0
     print("Live local demo не дошло до ожидаемой остановки. Проверьте report/replay.")
     return 1
@@ -1755,14 +2125,10 @@ async def _run_mail_spam_demo(args: argparse.Namespace) -> int:
     config = AppConfig.load()
     settings = MailSpamDemoSettings(
         site_dir=(
-            Path(args.site_dir)
-            if args.site_dir
-            else Path("reports/tmp/mail-spam-demo-site")
+            Path(args.site_dir) if args.site_dir else Path("reports/tmp/mail-spam-demo-site")
         ),
         profile_dir=(
-            Path(args.profile_dir)
-            if args.profile_dir
-            else Path(".browser-profiles/mail-spam-demo")
+            Path(args.profile_dir) if args.profile_dir else Path(".browser-profiles/mail-spam-demo")
         ),
         report_path=(
             Path(args.report_path)
@@ -1791,7 +2157,9 @@ async def _run_mail_spam_demo(args: argparse.Namespace) -> int:
         f"Пауз безопасности: {result.security_pause_count}."
     )
     if result.success:
-        print("Почтовое demo завершено безопасно: реальные аккаунты не использовались, письма не удалялись.")
+        print(
+            "Почтовое demo завершено безопасно: реальные аккаунты не использовались, письма не удалялись."
+        )
         return 0
     print("Почтовое demo остановилось раньше ожидаемого. Проверьте report/replay.")
     return 1
@@ -1803,9 +2171,7 @@ async def _run_food_order_demo(args: argparse.Namespace) -> int:
     config = AppConfig.load()
     settings = FoodOrderDemoSettings(
         site_dir=(
-            Path(args.site_dir)
-            if args.site_dir
-            else Path("reports/tmp/food-order-demo-site")
+            Path(args.site_dir) if args.site_dir else Path("reports/tmp/food-order-demo-site")
         ),
         profile_dir=(
             Path(args.profile_dir)
@@ -1901,9 +2267,9 @@ def _browser_action_message_ru(error_code: str | None) -> str:
 
 
 def _configure_logging(*, verbose: bool, debug: bool) -> None:
-    level = logging.DEBUG if debug else logging.INFO if verbose else logging.WARNING
+    level = logging.DEBUG if debug else logging.INFO if verbose else logging.CRITICAL
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(_StructuredLogFormatter())
+    handler.setFormatter(_StructuredLogFormatter(include_traceback=debug))
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
 
@@ -1923,6 +2289,10 @@ def _configure_console_streams() -> None:
 
 class _StructuredLogFormatter(logging.Formatter):
     """Emit compact JSON logs for internal diagnostics."""
+
+    def __init__(self, *, include_traceback: bool = False) -> None:
+        super().__init__()
+        self._include_traceback = include_traceback
 
     _EXTRA_KEYS = (
         "event",
@@ -1944,5 +2314,8 @@ class _StructuredLogFormatter(logging.Formatter):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            if self._include_traceback:
+                payload["exception"] = self.formatException(record.exc_info)
+            else:
+                payload["exception_type"] = record.exc_info[0].__name__
         return json.dumps(payload, ensure_ascii=False, default=str)

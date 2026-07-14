@@ -54,8 +54,9 @@ _LOGIN_PATTERN = re.compile(
 )
 _CAPTCHA_PATTERN = re.compile(
     r"\b(captcha|recaptcha|hcaptcha|verify you are human|prove you are human|"
-    r"unusual traffic|robot|automated requests|провер(?:ьте|ка),? что вы человек|"
-    r"капч|робот|автоматическ(?:ие|их) запрос)\b",
+    r"unusual traffic|not a robot|automated requests|"
+    r"провер(?:ьте|ка),? что вы человек|"
+    r"капч|я не робот|автоматическ(?:ие|их) запрос)\b",
     re.IGNORECASE,
 )
 _REGION_PATTERN = re.compile(
@@ -333,7 +334,11 @@ class SemanticObservationEngine:
 
         issues.extend(_classify_blocker_issues(snapshot))
 
-        if not snapshot.sections and not snapshot.interactive_elements and "empty_page" not in snapshot.issues:
+        if (
+            not snapshot.sections
+            and not snapshot.interactive_elements
+            and "empty_page" not in snapshot.issues
+        ):
             issues.append(
                 PageIssue(
                     code=PageIssueCode.EMPTY_PAGE,
@@ -530,6 +535,11 @@ def _issue_from_browser_code(code: str) -> PageIssue | None:
             "The browser is not started.",
             severity="warning",
         ),
+        "browser_disconnected": PageIssue(
+            PageIssueCode.OBSERVATION_ERROR,
+            "The browser driver connection was lost.",
+            severity="warning",
+        ),
         "observation_error": PageIssue(
             PageIssueCode.OBSERVATION_ERROR,
             "The page could not be observed completely.",
@@ -550,9 +560,8 @@ def _issue_from_browser_code(code: str) -> PageIssue | None:
 
 def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
     text = _snapshot_visible_text(snapshot)
-    dialog_text = " ".join(
-        f"{dialog.title or ''} {dialog.text}" for dialog in snapshot.dialogs
-    )
+    dialog_text = " ".join(f"{dialog.title or ''} {dialog.text}" for dialog in snapshot.dialogs)
+    primary_text = _snapshot_primary_text(snapshot)
     issues: list[PageIssue] = []
     if snapshot.dialogs:
         issues.append(
@@ -570,7 +579,12 @@ def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
                 severity="warning",
             )
         )
-    if _LOGIN_PATTERN.search(text) or _has_password_field(snapshot):
+    login_wall = (
+        _has_password_field(snapshot)
+        or bool(_LOGIN_PATTERN.search(dialog_text))
+        or (bool(_LOGIN_PATTERN.search(primary_text)) and _has_login_identifier_field(snapshot))
+    )
+    if login_wall:
         issues.append(
             PageIssue(
                 PageIssueCode.LOGIN_WALL,
@@ -578,7 +592,7 @@ def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
                 severity="warning",
             )
         )
-    if _CAPTCHA_PATTERN.search(text):
+    if _CAPTCHA_PATTERN.search(primary_text):
         issues.append(
             PageIssue(
                 PageIssueCode.CAPTCHA_BLOCKING_PAGE,
@@ -594,7 +608,7 @@ def _classify_blocker_issues(snapshot: BrowserPageSnapshot) -> list[PageIssue]:
                 severity="warning",
             )
         )
-    if _BLOCKED_PATTERN.search(text):
+    if _BLOCKED_PATTERN.search(primary_text):
         issues.append(
             PageIssue(
                 PageIssueCode.BLOCKED_PAGE,
@@ -635,8 +649,33 @@ def _snapshot_visible_text(snapshot: BrowserPageSnapshot) -> str:
     return " ".join(parts)
 
 
+def _snapshot_primary_text(snapshot: BrowserPageSnapshot) -> str:
+    parts = [snapshot.title or ""]
+    parts.extend(
+        f"{section.heading or ''} {section.text}"
+        for section in snapshot.sections
+        if section.role.casefold() not in {"banner", "contentinfo", "footer", "navigation"}
+    )
+    parts.extend(f"{dialog.title or ''} {dialog.text}" for dialog in snapshot.dialogs)
+    return " ".join(parts)
+
+
 def _has_password_field(snapshot: BrowserPageSnapshot) -> bool:
     return any(field.input_type == "password" for field in snapshot.form_fields)
+
+
+def _has_login_identifier_field(snapshot: BrowserPageSnapshot) -> bool:
+    login_field_pattern = re.compile(
+        r"\b(email|e-mail|phone|username|login|почта|телефон|логин)\b",
+        re.IGNORECASE,
+    )
+    return any(
+        field.input_type in {"email", "tel", "password"}
+        or login_field_pattern.search(
+            " ".join(value for value in (field.label, field.placeholder, field.field_name) if value)
+        )
+        for field in snapshot.form_fields
+    )
 
 
 def _copy_observation_with(

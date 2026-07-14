@@ -1,16 +1,29 @@
 import asyncio
 import json
 import importlib
+import logging
+import sys
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
 from scout_pilot.cli.main import main
 from scout_pilot.cli.main import build_parser
 from scout_pilot.cli.main import _extract_terminal_links
+from scout_pilot.cli.main import _extract_selected_result_reference
+from scout_pilot.cli.main import _ChatStatusLine
+from scout_pilot.cli.main import _chat_turn_memory_summaries
+from scout_pilot.cli.main import _ensure_menu_browser_available
+from scout_pilot.cli.main import _format_chat_line
+from scout_pilot.cli.main import _format_chat_prompt
 from scout_pilot.cli.main import _format_terminal_links
 from scout_pilot.cli.main import _normalize_menu_start_url
 from scout_pilot.cli.main import _open_menu_link
+from scout_pilot.cli.main import _open_previous_selected_result
 from scout_pilot.cli.main import _parse_open_link_command
+from scout_pilot.cli.main import _print_chat_run_evidence
+from scout_pilot.cli.main import _StructuredLogFormatter
+from scout_pilot.cli.main import _task_references_previous_selection
 from scout_pilot.models import ToolRequest
 
 
@@ -89,6 +102,25 @@ def test_menu_chat_hides_repeated_observation_noise_and_uses_honest_wait_text():
     assert cli_main._menu_tool_done_ru("browser.wait") == "ожидание завершено."
 
 
+def test_menu_chat_reports_exact_page_blocker_in_russian():
+    cli_main = importlib.import_module("scout_pilot.cli.main")
+    login_wall = SimpleNamespace(
+        name="page_blocker_detected",
+        details={"stop": True, "blocker_type": "login_wall"},
+    )
+    captcha = SimpleNamespace(
+        name="page_blocker_detected",
+        details={"stop": True, "blocker_type": "captcha_blocking_page"},
+    )
+
+    login_message = cli_main._menu_chat_event_message(login_wall, debug_output=False)
+    captcha_message = cli_main._menu_chat_event_message(captcha, debug_output=False)
+
+    assert "ручного входа" in login_message
+    assert "CAPTCHA" not in login_message
+    assert "CAPTCHA" in captcha_message
+
+
 def test_menu_url_normalization_accepts_plain_domain():
     normalized, error = _normalize_menu_start_url("hh.ru")
 
@@ -104,20 +136,63 @@ def test_menu_url_normalization_rejects_prompt_text():
 
 
 def test_terminal_links_are_short_clickable_and_blue_when_enabled():
-    message = (
-        "Вакансия: https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search."
-    )
+    message = "Вакансия: https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search."
 
     rendered = _format_terminal_links(message, use_color=True)
 
     assert "\x1b[94mhttps://hh.ru/vacancy/134165467\x1b[0m" in rendered
-    assert (
-        "\x1b]8;;https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search"
-        in rendered
-    )
+    assert "\x1b]8;;https://hh.ru/vacancy/134165467?query=AI+Engineer&source=search" in rendered
     assert "[1]" in rendered
     assert "Ctrl + клик или /open 1" in rendered
     assert rendered.endswith(".")
+
+
+def test_chat_roles_have_distinct_terminal_colors_when_enabled():
+    agent = _format_chat_line("Агент", "страница открыта.", use_color=True)
+    user = _format_chat_prompt("Вы > ", use_color=True)
+
+    assert "\x1b[96mАгент:" in agent
+    assert agent.endswith("страница открыта.")
+    assert "\x1b[93mВы > " in user
+    assert agent.endswith("\x1b[0m") is False
+    assert user.endswith("\x1b[0m")
+
+
+def test_chat_roles_remain_plain_when_color_is_disabled():
+    assert (
+        _format_chat_line("Агент", "страница открыта.", use_color=False)
+        == "Агент: страница открыта."
+    )
+    assert _format_chat_prompt("Вы > ", use_color=False) == "Вы > "
+
+
+def test_chat_status_replaces_the_current_terminal_line():
+    class TtyBuffer(StringIO):
+        def isatty(self):
+            return True
+
+    stream = TtyBuffer()
+    status = _ChatStatusLine(stream, use_color=False)
+
+    status.update("ищу вакансии...")
+    status.update("читаю вторую вакансию...")
+    status.clear()
+
+    assert stream.getvalue() == (
+        "\r\x1b[2KАгент: ищу вакансии...\r\x1b[2KАгент: читаю вторую вакансию...\r\x1b[2K"
+    )
+    assert status.last_message == "читаю вторую вакансию..."
+
+
+def test_chat_status_stays_silent_when_output_is_redirected():
+    stream = StringIO()
+    status = _ChatStatusLine(stream, use_color=False)
+
+    status.update("открываю страницу...")
+    status.clear()
+
+    assert stream.getvalue() == ""
+    assert status.last_message == "открываю страницу..."
 
 
 def test_terminal_links_keep_plain_output_readable_without_color():
@@ -127,8 +202,7 @@ def test_terminal_links_keep_plain_output_readable_without_color():
     )
 
     assert rendered == (
-        "Ссылка: [1] https://example.test/jobs/ai-engineer  "
-        "[Ctrl + клик или /open 1]"
+        "Ссылка: [1] https://example.test/jobs/ai-engineer  [Ctrl + клик или /open 1]"
     )
     assert "\x1b[" not in rendered
 
@@ -177,10 +251,150 @@ def test_open_menu_link_uses_exact_url_through_tool_runtime():
         )
     )
 
-    assert runtime.requests == [
-        ToolRequest("browser.navigate", {"url": target_url})
-    ]
+    assert runtime.requests == [ToolRequest("browser.navigate", {"url": target_url})]
     assert message == "Открыл ссылку 1: AI Engineer vacancy"
+
+
+def test_follow_up_opens_the_exact_result_selected_in_previous_answer():
+    selected_url = "https://example.test/vacancies/1002?source=search"
+    answer = (
+        "1. Python AI Developer\n"
+        "https://example.test/vacancies/1001?source=search\n\n"
+        "2. ML/LLM Engineer в AI Lab\n"
+        f"{selected_url}\n\n"
+        "3. AI Platform Engineer\n"
+        "https://example.test/vacancies/1003?source=search\n\n"
+        "Лучший вариант — ML/LLM Engineer в AI Lab: наиболее точное совпадение."
+    )
+
+    selected = _extract_selected_result_reference(answer)
+
+    assert selected == ("ML/LLM Engineer в AI Lab", selected_url)
+    assert _task_references_previous_selection("Открой лучшую вакансию и покажи её")
+    assert any(selected_url in summary for summary in _chat_turn_memory_summaries("Сравни", answer))
+
+    class FakeRuntime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            return SimpleNamespace(success=True, message="Navigation completed.")
+
+    class FakeBrowser:
+        async def current_state(self):
+            return SimpleNamespace(
+                url="https://example.test/vacancies/1003?source=search",
+                title="AI Platform Engineer",
+            )
+
+    runtime = FakeRuntime()
+    message = asyncio.run(
+        _open_previous_selected_result(
+            label=selected[0],
+            target_url=selected[1],
+            tool_runtime=runtime,
+            browser=FakeBrowser(),
+        )
+    )
+
+    assert runtime.requests == [ToolRequest("browser.navigate", {"url": selected_url})]
+    assert "ML/LLM Engineer в AI Lab" in message
+
+
+def test_chat_run_evidence_prints_context_and_distinct_page_counts(capsys):
+    runtime = SimpleNamespace(
+        last_observed_resource_urls=(
+            "https://example.test/vacancies/1001",
+            "https://example.test/vacancies/1002",
+            "https://example.test/vacancies/1003",
+        ),
+        last_repeated_target_preventions=2,
+    )
+
+    _print_chat_run_evidence(
+        runtime,
+        {
+            "before_tokens": 5200,
+            "after_tokens": 1800,
+            "observation_sections_kept": 5,
+            "observation_sections_before": 12,
+            "memory_summaries_kept": 3,
+            "memory_summaries_before": 6,
+            "emergency_compression_applied": False,
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "Контекст: 5200 -> 1800 токенов" in output
+    assert "разделы 5/12" in output
+    assert "Страницы в контексте задачи: 3" in output
+    assert "повторных переходов предотвращено 2" in output
+
+
+def test_menu_restarts_disconnected_browser_before_next_task():
+    start_url = "https://example.test/search"
+
+    class FakeBrowser:
+        def __init__(self):
+            self.stopped = 0
+            self.started = 0
+
+        async def current_state(self):
+            return SimpleNamespace(is_started=False)
+
+        async def stop(self):
+            self.stopped += 1
+
+        async def start(self):
+            self.started += 1
+
+    class FakeRuntime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            return SimpleNamespace(success=True)
+
+    browser = FakeBrowser()
+    runtime = FakeRuntime()
+
+    ready, message = asyncio.run(
+        _ensure_menu_browser_available(
+            browser=browser,
+            tool_runtime=runtime,
+            start_url=start_url,
+        )
+    )
+
+    assert ready is True
+    assert "восстановлена" in str(message)
+    assert browser.stopped == 1
+    assert browser.started == 1
+    assert runtime.requests == [ToolRequest("browser.navigate", {"url": start_url})]
+
+
+def test_structured_log_hides_traceback_outside_debug_mode():
+    try:
+        raise RuntimeError("private driver details")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="scout_pilot.runtime.agent",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="runtime_fatal_error",
+        args=(),
+        exc_info=exc_info,
+    )
+    rendered = _StructuredLogFormatter(include_traceback=False).format(record)
+
+    assert '"exception_type": "RuntimeError"' in rendered
+    assert "private driver details" not in rendered
+    assert "Traceback" not in rendered
 
 
 def test_demo_vacancy_search_command_requires_start_url():
@@ -661,9 +875,9 @@ def test_food_order_demo_runs_local_synthetic_site(tmp_path, capsys):
 
 def test_live_local_demo_provider_uses_no_site_routes_or_selectors():
     source_root = Path(__file__).resolve().parents[1] / "src" / "scout_pilot"
-    provider_source = (source_root / "llm" / "mock_provider.py").read_text(
-        encoding="utf-8"
-    ).casefold()
+    provider_source = (
+        (source_root / "llm" / "mock_provider.py").read_text(encoding="utf-8").casefold()
+    )
     class_source = provider_source.split("class deterministiclocaldemomockprovider", 1)[1]
     class_source = class_source.split("def _local_demo_plan_response", 1)[0]
     forbidden = (

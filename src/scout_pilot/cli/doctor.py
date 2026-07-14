@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.metadata
 import importlib.util
@@ -73,6 +74,7 @@ async def run_doctor(
         check_python_version(),
         check_package_import(),
         check_playwright_installed(),
+        check_architecture_boundaries(cwd=cwd),
         check_env_file(settings.env_file, cwd=cwd),
     ]
 
@@ -161,8 +163,7 @@ def check_playwright_installed() -> DoctorCheck:
             status="failed",
             blocker=True,
             message_ru=(
-                "пакет не найден. Установите зависимости командой "
-                "`python -m pip install -e .`."
+                "пакет не найден. Установите зависимости командой `python -m pip install -e .`."
             ),
         )
     try:
@@ -174,6 +175,95 @@ def check_playwright_installed() -> DoctorCheck:
         label="Playwright",
         status="ok",
         message_ru=f"пакет установлен ({version}).",
+    )
+
+
+def check_architecture_boundaries(*, cwd: Path = Path.cwd()) -> DoctorCheck:
+    """Verify the source boundaries that are important for the assignment."""
+
+    source_root = cwd / "src" / "scout_pilot"
+    if not source_root.exists():
+        return DoctorCheck(
+            key="architecture_boundaries",
+            label="Архитектурные границы",
+            status="warning",
+            message_ru="папка src/scout_pilot не найдена; проверка пропущена.",
+        )
+
+    violations: list[str] = []
+    core_site_neutral_layers = {
+        "llm",
+        "navigation",
+        "observation",
+        "planning",
+        "runtime",
+        "security",
+        "tools",
+    }
+    for path in source_root.rglob("*.py"):
+        content = path.read_text(encoding="utf-8")
+        lowered = content.casefold()
+        relative = path.relative_to(source_root)
+        top_layer = relative.parts[0]
+        try:
+            tree = ast.parse(content, filename=str(relative))
+        except SyntaxError as exc:
+            violations.append(f"parse error in {relative.as_posix()}: {exc.msg}")
+            continue
+        imported_modules = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+        if any(module.startswith("playwright") for module in imported_modules) and (
+            top_layer != "browser"
+        ):
+            violations.append(f"Playwright вне Browser Engine: {relative.as_posix()}")
+        if (
+            any(
+                module == "openai"
+                or module.startswith("openai.")
+                or module == "anthropic"
+                or module.startswith("anthropic.")
+                for module in imported_modules
+            )
+            and top_layer != "llm"
+        ):
+            violations.append(f"provider SDK вне LLM Layer: {relative.as_posix()}")
+        forbidden_html_calls = {"content", "inner" + "_html", "outer" + "_html"}
+        raw_html_call = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in forbidden_html_calls
+            for node in ast.walk(tree)
+        )
+        raw_html_script = relative.as_posix() != "cli/doctor.py" and any(
+            marker in content for marker in ("inner" + "HTML", "outer" + "HTML")
+        )
+        if raw_html_call or raw_html_script:
+            violations.append(f"полный HTML API: {relative.as_posix()}")
+        if top_layer in core_site_neutral_layers and any(
+            marker in lowered for marker in ("hh.ru", "data-qa=")
+        ):
+            violations.append(f"site-specific логика: {relative.as_posix()}")
+
+    if violations:
+        return DoctorCheck(
+            key="architecture_boundaries",
+            label="Архитектурные границы",
+            status="failed",
+            blocker=True,
+            message_ru="; ".join(violations[:3]),
+        )
+    return DoctorCheck(
+        key="architecture_boundaries",
+        label="Архитектурные границы",
+        status="ok",
+        message_ru=(
+            "Playwright изолирован в Browser Engine; SDK провайдеров — в LLM Layer; "
+            "полный HTML и HH.ru-специфичная логика в независимых слоях не найдены."
+        ),
     )
 
 
@@ -413,7 +503,9 @@ def format_doctor_report(report: DoctorReport) -> tuple[str, ...]:
             "Итог: есть блокеры для demo. Исправьте строки с [ОШИБКА] и повторите `scout-pilot doctor`."
         )
     else:
-        lines.append("Итог: критических блокеров нет. Предупреждения можно разобрать перед записью demo.")
+        lines.append(
+            "Итог: критических блокеров нет. Предупреждения можно разобрать перед записью demo."
+        )
     return tuple(lines)
 
 

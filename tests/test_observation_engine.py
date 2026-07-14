@@ -119,8 +119,7 @@ def test_oversized_page_is_bounded_and_reports_truncation(tmp_path):
 
 def test_oversized_page_keeps_main_results_before_header_navigation(tmp_path):
     navigation = "".join(
-        f'<a href="https://example.test/nav/{index}">Menu item {index}</a>'
-        for index in range(30)
+        f'<a href="https://example.test/nav/{index}">Menu item {index}</a>' for index in range(30)
     )
     results = "".join(
         f'<a href="https://example.test/details/{index}">AI Engineer result {index} with salary</a>'
@@ -168,7 +167,9 @@ def test_repeated_navigation_and_footer_content_is_deduplicated(tmp_path):
     observation = _observe_html(tmp_path, html)
 
     section_texts = [section.text for section in observation.sections]
-    link_targets = [element.target_url for element in observation.interactive_elements if element.role == "link"]
+    link_targets = [
+        element.target_url for element in observation.interactive_elements if element.role == "link"
+    ]
 
     assert sum("Home Jobs" in text for text in section_texts) == 1
     assert sum("Contact Support" in text for text in section_texts) == 1
@@ -242,15 +243,52 @@ def test_non_blocking_location_control_is_not_a_region_prompt(tmp_path):
     assert PageIssueCode.REGION_PROMPT not in {issue.code for issue in observation.issues}
 
 
+def test_navigation_login_link_does_not_turn_an_article_into_a_login_wall(tmp_path):
+    html = """
+    <!doctype html>
+    <title>Help article</title>
+    <header><nav><a href="/login">Sign in</a></nav></header>
+    <main>
+      <h1>Working with search results</h1>
+      <article>
+        This article explains how result pages and filters work for registered and guest users.
+      </article>
+    </main>
+    """
+
+    observation = _observe_html(tmp_path, html)
+
+    assert PageIssueCode.LOGIN_WALL not in {issue.code for issue in observation.issues}
+
+
+def test_robotics_content_is_not_misclassified_as_captcha(tmp_path):
+    html = """
+    <!doctype html>
+    <title>Robotics Software Engineer</title>
+    <main>
+      <h1>Robotics Software Engineer</h1>
+      <p>Develop robot navigation software and automated warehouse systems.</p>
+    </main>
+    """
+
+    observation = _observe_html(tmp_path, html)
+
+    assert PageIssueCode.CAPTCHA_BLOCKING_PAGE not in {issue.code for issue in observation.issues}
+
+
 def test_loading_snapshot_reports_loading_issue():
-    engine = SemanticObservationEngine(FakeSnapshotBrowser(BrowserPageSnapshot(
-        url="https://example.test/loading",
-        title="Loading",
-        origin="https://example.test",
-        load_state="loading",
-        is_visible=True,
-        issues=("loading",),
-    )))
+    engine = SemanticObservationEngine(
+        FakeSnapshotBrowser(
+            BrowserPageSnapshot(
+                url="https://example.test/loading",
+                title="Loading",
+                origin="https://example.test",
+                load_state="loading",
+                is_visible=True,
+                issues=("loading",),
+            )
+        )
+    )
 
     observation = asyncio.run(engine.observe())
 

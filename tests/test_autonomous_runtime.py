@@ -17,6 +17,7 @@ from scout_pilot.memory import HierarchicalMemory
 from scout_pilot.models import (
     ExecutionPlan,
     DialogSummary,
+    FormFieldSummary,
     InteractiveElement,
     PageIssue,
     PageIssueCode,
@@ -34,11 +35,20 @@ from scout_pilot.runtime import (
     TaskTerminationReason,
 )
 from scout_pilot.runtime.agent import (
+    _alternative_unvisited_target_tool,
+    _answer_observed_resource_count,
+    _dominant_interactive_resource_shape,
+    _first_unvisited_resource_tool,
     _page_blocker_decision,
+    _qualified_resource_probe_target,
     _requested_distinct_resource_count,
     _resource_observation_has_evidence,
+    _resource_observation_matches_explicit_evidence,
     _resource_observation_summaries,
+    _task_has_hard_numeric_filter,
+    _task_requires_qualified_resources,
     _target_url_for_tool,
+    _without_upper_bound_search_filter,
 )
 from scout_pilot.observation import SemanticObservationEngine
 from scout_pilot.tools import DefaultToolRuntime, ToolContext, create_browser_tool_registry
@@ -69,9 +79,7 @@ def test_runtime_runs_mocked_end_to_end_to_completion():
     events = asyncio.run(_collect(runtime.run(UserTask("Click the primary action"))))
 
     transition_states = [
-        event.details["to_state"]
-        for event in events
-        if event.name == "state_transition"
+        event.details["to_state"] for event in events if event.name == "state_transition"
     ]
     assert runtime.last_result is not None
     assert runtime.last_result.success is True
@@ -85,11 +93,7 @@ def test_runtime_runs_mocked_end_to_end_to_completion():
     assert "reasoning" in transition_states
     assert "executing" in transition_states
     assert "evaluating" in transition_states
-    assert all(
-        event.details["reason"]
-        for event in events
-        if event.name == "state_transition"
-    )
+    assert all(event.details["reason"] for event in events if event.name == "state_transition")
     assert any(event.name == "reflection_completed" for event in events)
     budget_events = [event for event in events if event.name == "context_budget_applied"]
     assert any(event.details["component"] == "reasoning" for event in budget_events)
@@ -132,9 +136,7 @@ def test_runtime_retries_retryable_tool_failure_and_revises_plan():
     events = asyncio.run(_collect(runtime.run(UserTask("Retry once"))))
 
     transition_states = [
-        event.details["to_state"]
-        for event in events
-        if event.name == "state_transition"
+        event.details["to_state"] for event in events if event.name == "state_transition"
     ]
     assert runtime.last_result is not None
     assert runtime.last_result.success is True
@@ -264,9 +266,7 @@ def test_runtime_blocks_reopening_the_same_observed_target_url():
     planner = FakePlanningEngine(
         ToolRequest(name="browser.click", arguments={"element_id": "el_first"})
     )
-    tool_runtime = FakeToolRuntime(
-        [_tool_result("browser.click", success=True)]
-    )
+    tool_runtime = FakeToolRuntime([_tool_result("browser.click", success=True)])
     runtime = AutonomousAgentRuntime(
         observation_engine=RepeatedLinkObservationEngine(target_url),
         reasoning_engine=ReasoningEngine(provider),
@@ -287,6 +287,689 @@ def test_runtime_blocks_reopening_the_same_observed_target_url():
     assert blocked.details["target_url"] == target_url
 
 
+def test_runtime_blocks_repeating_exact_tool_request_on_unchanged_page():
+    request = ToolRequest(name="test.click", arguments={"target": "search"})
+    provider = MockLlmProvider(
+        [
+            _tool_call_result(request.name, request.arguments),
+            _tool_call_result(request.name, request.arguments),
+            _text_result("Used an alternative and completed."),
+        ]
+    )
+    tool_runtime = FakeToolRuntime([_tool_result(request.name, success=True)])
+    runtime = AutonomousAgentRuntime(
+        observation_engine=StaticObservationEngine(),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(request),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_tool_schema()],
+        settings=RuntimeSettings(max_iterations=4, max_failures=3),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Use the search once"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [request]
+    blocked = next(event for event in events if event.name == "repeated_tool_request_blocked")
+    assert blocked.details["tool_name"] == request.name
+    assert blocked.details["next_action"] == "choose_different_tool_or_more_specific_target"
+
+
+def test_runtime_executes_a_resolved_click_instead_of_resolving_it_again():
+    target_url = "https://example.test/vacancies/1001"
+    resolve_request = ToolRequest(
+        name="browser.resolve_target",
+        arguments={"kind": "click", "target": "AI Engineer", "role": "link"},
+    )
+
+    class ObservationEngine:
+        opened = False
+
+        async def observe(self):
+            if self.opened:
+                return PageObservation(
+                    url=target_url,
+                    title="AI Engineer",
+                    summary="Vacancy requirements.",
+                )
+            return PageObservation(
+                url="https://example.test/search",
+                title="Search results",
+                summary="Vacancy search results.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id="el_ai_engineer",
+                        role="link",
+                        accessible_name="AI Engineer",
+                        visible_text="AI Engineer",
+                        target_url=target_url,
+                    )
+                ],
+            )
+
+    observation_engine = ObservationEngine()
+
+    class Runtime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            if request.name == "browser.resolve_target":
+                return _tool_result(
+                    request.name,
+                    success=True,
+                    data={
+                        "resolution": {
+                            "status": "resolved",
+                            "selected": {
+                                "id": "el_ai_engineer",
+                                "target_url": target_url,
+                            },
+                        }
+                    },
+                )
+            observation_engine.opened = True
+            return _tool_result(request.name, success=True)
+
+    tool_runtime = Runtime()
+    provider = MockLlmProvider(
+        [
+            _tool_call_result(resolve_request.name, resolve_request.arguments),
+            _text_result("Read the vacancy."),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(resolve_request),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[
+            _browser_resolve_target_schema(),
+            _browser_navigate_schema(),
+        ],
+        settings=RuntimeSettings(max_iterations=4, max_failures=2),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Read an AI Engineer vacancy"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        resolve_request,
+        ToolRequest(name="browser.navigate", arguments={"url": target_url}),
+    ]
+    assert len(provider.requests) == 2
+    assert any(event.name == "resolved_target_followup_selected" for event in events)
+    assert not any(event.name == "repeated_tool_request_blocked" for event in events)
+
+
+def test_runtime_recovers_failed_semantic_match_without_another_provider_decision():
+    result_urls = [
+        "https://example.test/vacancies/1001",
+        "https://example.test/vacancies/1002",
+        "https://example.test/vacancies/1003",
+    ]
+    resolve_request = ToolRequest(
+        name="browser.resolve_target",
+        arguments={"kind": "click", "target": "matching vacancy", "role": "link"},
+    )
+
+    class ObservationEngine:
+        opened_url = None
+
+        async def observe(self):
+            if self.opened_url is not None:
+                return PageObservation(
+                    url=self.opened_url,
+                    title="AI Engineer",
+                    summary="Python and LLM requirements.",
+                    sections=[
+                        SemanticSection(
+                            section_id="requirements",
+                            role="main",
+                            heading="Requirements",
+                            text="Production Python and LLM application experience.",
+                        )
+                    ],
+                )
+            return PageObservation(
+                url="https://example.test/search",
+                title="Search results",
+                summary="Three vacancy results.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id=f"el_{index}",
+                        role="link",
+                        accessible_name=f"Vacancy {index}",
+                        visible_text=f"Vacancy {index}",
+                        target_url=url,
+                    )
+                    for index, url in enumerate(result_urls, start=1)
+                ],
+            )
+
+    observation_engine = ObservationEngine()
+
+    class Runtime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            if request.name == "browser.resolve_target":
+                return _tool_result(
+                    request.name,
+                    success=False,
+                    status=ToolExecutionStatus.FAILED,
+                    message="Multiple visible semantic candidates matched the intent.",
+                    error_code="ambiguous_semantic_target",
+                )
+            observation_engine.opened_url = request.arguments["url"]
+            return _tool_result(request.name, success=True)
+
+    tool_runtime = Runtime()
+    provider = MockLlmProvider(
+        [
+            _tool_call_result(resolve_request.name, resolve_request.arguments),
+            _text_result("One candidate was read; continue from the collected evidence."),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(resolve_request),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[
+            _browser_resolve_target_schema(),
+            _browser_navigate_schema(),
+        ],
+        settings=RuntimeSettings(max_iterations=4, max_failures=2),
+    )
+
+    events = asyncio.run(
+        _collect(runtime.run(UserTask("Find three different vacancies and compare them")))
+    )
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        resolve_request,
+        ToolRequest(name="browser.navigate", arguments={"url": result_urls[0]}),
+    ]
+    assert len(provider.requests) == 2
+    assert any(event.name == "semantic_recovery_scheduled" for event in events)
+    assert any(event.name == "semantic_recovery_selected" for event in events)
+
+
+def test_filtered_collection_continues_until_three_observed_urls_are_answered():
+    urls = [
+        "https://example.test/vacancies/1001",
+        "https://example.test/vacancies/1002",
+        "https://example.test/vacancies/1003",
+    ]
+
+    class ObservationEngine:
+        current_url = urls[0]
+
+        async def observe(self):
+            return PageObservation(
+                url=self.current_url,
+                title=f"AI Engineer {self.current_url.rsplit('/', 1)[-1]}",
+                summary="Salary 300000 RUB. Production Python and LLM role.",
+                sections=[
+                    SemanticSection(
+                        section_id="requirements",
+                        role="main",
+                        heading="Requirements",
+                        text="Salary 300000 RUB. Python, LLM and RAG experience required.",
+                    )
+                ],
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id=f"el_{index}",
+                        role="link",
+                        accessible_name=f"AI Engineer {index}",
+                        visible_text=f"AI Engineer {index}",
+                        target_url=url,
+                    )
+                    for index, url in enumerate(urls, start=1)
+                    if url != self.current_url
+                ],
+            )
+
+    observation_engine = ObservationEngine()
+
+    class Runtime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            observation_engine.current_url = str(request.arguments["url"])
+            return _tool_result(request.name, success=True)
+
+    provider = MockLlmProvider([_text_result(f"Three matches. {urls[0]} {urls[1]} {urls[2]}")])
+    tool_runtime = Runtime()
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_navigate_schema()],
+        settings=RuntimeSettings(max_iterations=6, max_failures=2),
+        initial_memory_summaries=("Previous turn selected only verified links.",),
+    )
+
+    events = asyncio.run(
+        _collect(
+            runtime.run(
+                UserTask("Find three vacancies with explicitly stated salary and requirements")
+            )
+        )
+    )
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == f"Three matches. {urls[0]} {urls[1]} {urls[2]}"
+    assert tool_runtime.requests == [
+        ToolRequest("browser.navigate", {"url": urls[1]}),
+        ToolRequest("browser.navigate", {"url": urls[2]}),
+    ]
+    assert len(provider.requests) == 1
+    assert (
+        len([event for event in events if event.name == "resource_collection_followup_selected"])
+        == 2
+    )
+    assert runtime.last_observed_resource_urls == tuple(urls)
+    first_payload = json.loads(provider.requests[0].messages[1].content)
+    assert "Previous turn selected only verified links." in first_payload["memory_summaries"]
+
+
+def test_comparison_followup_uses_conversation_memory_without_browsing():
+    urls = (
+        "https://example.test/vacancies/1001",
+        "https://example.test/vacancies/1002",
+        "https://example.test/vacancies/1003",
+    )
+    provider = MockLlmProvider([_text_result(f"Лучший вариант — AI Engineer\n{urls[1]}")])
+    tool_runtime = FakeToolRuntime([])
+    runtime = AutonomousAgentRuntime(
+        observation_engine=StaticObservationEngine(),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[_browser_navigate_schema()],
+        initial_memory_summaries=(
+            f"Previous verified results: {' '.join(urls)}",
+            "All three pages were read separately.",
+        ),
+    )
+
+    events = asyncio.run(
+        _collect(
+            runtime.run(UserTask("Compare the previously found results and choose the best option"))
+        )
+    )
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert runtime.last_result.answer == f"Лучший вариант — AI Engineer\n{urls[1]}"
+    assert len(provider.requests) == 1
+    assert tool_runtime.requests == []
+    completed = next(event for event in events if event.name == "task_completed")
+    assert completed.details["completion_trigger"] == "memory_only_followup"
+
+
+def test_qualified_resource_helpers_require_observed_answer_urls():
+    urls = {
+        "https://example.test/vacancies/1001",
+        "https://example.test/vacancies/1002",
+    }
+
+    assert _task_requires_qualified_resources(
+        "Найди три вакансии с явно указанной зарплатой и требованиями"
+    )
+    assert _qualified_resource_probe_target("Find three jobs with salary", 3) == 5
+    assert (
+        _answer_observed_resource_count(
+            "One observed https://example.test/vacancies/1001 and one invented "
+            "https://example.test/vacancies/9999",
+            urls,
+        )
+        == 1
+    )
+
+
+def test_resource_collection_keeps_the_dominant_resource_shape():
+    vacancies = [
+        "https://example.test/vacancy/1001",
+        "https://example.test/vacancy/1002",
+        "https://example.test/vacancy/1003",
+    ]
+    observation = PageObservation(
+        url="https://example.test/search",
+        title="Results",
+        summary="Three vacancies and service links are visible.",
+        interactive_elements=[
+            *[
+                InteractiveElement(
+                    element_id=f"vacancy_{index}",
+                    role="link",
+                    accessible_name=f"Vacancy {index}",
+                    visible_text=f"Vacancy {index}",
+                    target_url=url,
+                )
+                for index, url in enumerate(vacancies, start=1)
+            ],
+            InteractiveElement(
+                element_id="employer",
+                role="link",
+                accessible_name="Employer",
+                visible_text="Employer",
+                target_url="https://example.test/employer/1455",
+            ),
+            InteractiveElement(
+                element_id="help",
+                role="link",
+                accessible_name="Help",
+                visible_text="Help",
+                target_url="https://example.test/article/5951",
+            ),
+        ],
+    )
+
+    preferred_shape = _dominant_interactive_resource_shape(observation)
+    request = _first_unvisited_resource_tool(
+        observation,
+        {vacancies[0]},
+        preferred_shape=preferred_shape,
+    )
+
+    assert preferred_shape == ("https", "example.test", "/vacancy/{id}")
+    assert request == ToolRequest("browser.navigate", {"url": vacancies[1]})
+
+
+def test_explicit_salary_evidence_requires_a_visible_numeric_value():
+    missing_salary = PageObservation(
+        url="https://example.test/vacancy/1001",
+        title="AI Engineer",
+        summary="Salary not specified.",
+        sections=[
+            SemanticSection(
+                section_id="main",
+                role="main",
+                heading="Requirements",
+                text="Python and LLM production experience required.",
+            )
+        ],
+    )
+    visible_salary = PageObservation(
+        url="https://example.test/vacancy/1002",
+        title="AI Engineer",
+        summary="Salary 300 000 RUB per month.",
+        sections=missing_salary.sections,
+    )
+
+    task = "Find vacancies with explicitly stated salary"
+    assert _resource_observation_matches_explicit_evidence(task, missing_salary) is False
+    assert _resource_observation_matches_explicit_evidence(task, visible_salary) is True
+
+
+def test_explicit_salary_evidence_enforces_upper_and_lower_bounds():
+    def observation(summary: str, resource_id: int) -> PageObservation:
+        return PageObservation(
+            url=f"https://example.test/vacancy/{resource_id}",
+            title="AI Engineer",
+            summary=summary,
+            sections=[
+                SemanticSection(
+                    section_id="main",
+                    role="main",
+                    heading="Requirements",
+                    text="Python, LLM and RAG production experience required.",
+                )
+            ],
+        )
+
+    up_to_task = "Найди вакансии с зарплатой до 70 000 рублей"
+    assert (
+        _resource_observation_matches_explicit_evidence(
+            up_to_task,
+            observation("Зарплата до 60 000 ₽ в месяц.", 1001),
+        )
+        is True
+    )
+    assert (
+        _resource_observation_matches_explicit_evidence(
+            up_to_task,
+            observation("Зарплата до 150 000 ₽ в месяц.", 1002),
+        )
+        is False
+    )
+    assert (
+        _resource_observation_matches_explicit_evidence(
+            up_to_task,
+            observation("Зарплата 250 000–350 000 ₽ в месяц.", 1003),
+        )
+        is False
+    )
+
+    at_least_task = "Find vacancies with salary at least 250000 RUB"
+    assert (
+        _resource_observation_matches_explicit_evidence(
+            at_least_task,
+            observation("Salary from 300000 RUB per month.", 1004),
+        )
+        is True
+    )
+    assert (
+        _resource_observation_matches_explicit_evidence(
+            at_least_task,
+            observation("Salary 200000-350000 RUB per month.", 1005),
+        )
+        is False
+    )
+
+
+def test_runtime_opens_an_unvisited_result_instead_of_rewriting_search_repeatedly():
+    target_url = "https://example.test/items/1001"
+    search_requests = [
+        ToolRequest(
+            name="browser.fill_by_label",
+            arguments={"label": "Search", "value": value},
+        )
+        for value in ("AI Engineer", "Python AI Developer", "LLM Engineer")
+    ]
+
+    class ObservationEngine:
+        opened = False
+
+        async def observe(self):
+            if self.opened:
+                return PageObservation(
+                    url=target_url,
+                    title="AI Engineer",
+                    summary="A result detail page.",
+                )
+            return PageObservation(
+                url="https://example.test/search",
+                title="Search results",
+                summary="Search results with an unvisited item.",
+                interactive_elements=[
+                    InteractiveElement(
+                        element_id="el_result",
+                        role="link",
+                        accessible_name="AI Engineer",
+                        visible_text="AI Engineer",
+                        target_url=target_url,
+                    )
+                ],
+            )
+
+    observation_engine = ObservationEngine()
+
+    class Runtime:
+        def __init__(self):
+            self.requests = []
+
+        async def execute(self, request):
+            self.requests.append(request)
+            if request.name == "browser.navigate":
+                observation_engine.opened = True
+            return _tool_result(request.name, success=True)
+
+    tool_runtime = Runtime()
+    provider = MockLlmProvider(
+        [
+            *(_tool_call_result(request.name, request.arguments) for request in search_requests),
+            _text_result("Read one unvisited result."),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=observation_engine,
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(search_requests[0]),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[
+            _browser_fill_by_label_schema(),
+            _browser_navigate_schema(),
+        ],
+        settings=RuntimeSettings(
+            max_iterations=5,
+            max_failures=2,
+            max_search_reformulations=2,
+        ),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Compare search results"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        search_requests[0],
+        search_requests[1],
+        ToolRequest(name="browser.navigate", arguments={"url": target_url}),
+    ]
+    assert any(event.name == "search_reformulation_redirected" for event in events)
+
+
+def test_runtime_submits_a_search_fill_without_another_provider_decision():
+    fill_request = ToolRequest(
+        name="browser.fill_by_label",
+        arguments={"label": "Search vacancies", "value": "AI Engineer"},
+    )
+
+    class SearchObservationEngine:
+        async def observe(self):
+            return PageObservation(
+                url="https://example.test/search",
+                title="Vacancy search",
+                summary="Search vacancies.",
+                form_fields=[
+                    FormFieldSummary(
+                        field_id="field_search",
+                        role="searchbox",
+                        input_type="search",
+                        label="Search vacancies",
+                        placeholder="Role",
+                        value_state="filled",
+                    )
+                ],
+            )
+
+    provider = MockLlmProvider(
+        [
+            _tool_call_result(fill_request.name, fill_request.arguments),
+            _text_result("Search submitted and results inspected."),
+        ]
+    )
+    tool_runtime = FakeToolRuntime(
+        [
+            _tool_result("browser.fill_by_label", success=True),
+            _tool_result("browser.press_key", success=True),
+        ]
+    )
+    runtime = AutonomousAgentRuntime(
+        observation_engine=SearchObservationEngine(),
+        reasoning_engine=ReasoningEngine(provider),
+        planning_engine=FakePlanningEngine(fill_request),
+        tool_runtime=tool_runtime,
+        memory=HierarchicalMemory(),
+        tool_schemas=[
+            _browser_fill_by_label_schema(),
+            _browser_press_key_schema(),
+        ],
+        settings=RuntimeSettings(max_iterations=4, max_failures=2),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Find AI Engineer vacancies"))))
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.success is True
+    assert tool_runtime.requests == [
+        fill_request,
+        ToolRequest(name="browser.press_key", arguments={"key": "Enter"}),
+    ]
+    assert len(provider.requests) == 2
+    assert any(event.name == "search_submit_selected" for event in events)
+
+
+def test_upper_bound_is_removed_from_generic_search_query():
+    observation = PageObservation(
+        url="https://example.test/search",
+        title="Search",
+        summary="Search form.",
+    )
+    request = ToolRequest(
+        name="browser.fill_by_label",
+        arguments={
+            "label": "Поиск вакансий",
+            "value": "AI Engineer зарплата до 70 000 рублей",
+        },
+    )
+
+    sanitized, changed = _without_upper_bound_search_filter(
+        "Найди AI Engineer с зарплатой до 70 000 рублей",
+        observation,
+        request,
+    )
+
+    assert changed is True
+    assert sanitized.arguments["value"] == "AI Engineer"
+
+
+def test_lower_bound_search_query_is_not_rewritten_as_an_upper_bound():
+    observation = PageObservation(
+        url="https://example.test/search",
+        title="Search",
+        summary="Search form.",
+    )
+    request = ToolRequest(
+        name="browser.fill_by_label",
+        arguments={
+            "label": "Поиск вакансий",
+            "value": "AI Engineer зарплата от 250 000 рублей",
+        },
+    )
+
+    sanitized, changed = _without_upper_bound_search_filter(
+        "Найди AI Engineer с зарплатой от 250 000 рублей",
+        observation,
+        request,
+    )
+
+    assert changed is False
+    assert sanitized == request
+
+
 def test_runtime_tracks_urls_opened_through_semantic_click_intent():
     target_url = "https://example.test/vacancies/first"
     request = ToolRequest(
@@ -300,9 +983,7 @@ def test_runtime_tracks_urls_opened_through_semantic_click_intent():
             _text_result("Compared distinct vacancies."),
         ]
     )
-    tool_runtime = FakeToolRuntime(
-        [_tool_result("browser.click_by_intent", success=True)]
-    )
+    tool_runtime = FakeToolRuntime([_tool_result("browser.click_by_intent", success=True)])
     runtime = AutonomousAgentRuntime(
         observation_engine=RepeatedLinkObservationEngine(target_url),
         reasoning_engine=ReasoningEngine(provider),
@@ -364,9 +1045,7 @@ def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():
             _text_result("Compared two different items."),
         ]
     )
-    planner = FakePlanningEngine(
-        ToolRequest(name="browser.navigate", arguments={"url": first_url})
-    )
+    planner = FakePlanningEngine(ToolRequest(name="browser.navigate", arguments={"url": first_url}))
     tool_runtime = FakeToolRuntime(
         [
             _tool_result("browser.navigate", success=True),
@@ -405,6 +1084,47 @@ def test_runtime_remaps_repeated_resource_url_to_unvisited_equivalent():
     )
 
 
+def test_semantic_click_intent_can_remap_to_an_unvisited_equivalent_url():
+    first_url = "https://example.test/items/1001"
+    second_url = "https://example.test/items/1002"
+    observation = PageObservation(
+        url="https://example.test/search",
+        title="Results",
+        summary="Two equivalent result links.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_first",
+                role="link",
+                accessible_name="AI Engineer",
+                visible_text="AI Engineer",
+                target_url=first_url,
+            ),
+            InteractiveElement(
+                element_id="el_second",
+                role="link",
+                accessible_name="Python AI Developer",
+                visible_text="Python AI Developer",
+                target_url=second_url,
+            ),
+        ],
+    )
+
+    remapped = _alternative_unvisited_target_tool(
+        observation,
+        ToolRequest(
+            name="browser.click_by_intent",
+            arguments={"target": "AI Engineer", "role": "link"},
+        ),
+        first_url,
+        {first_url},
+    )
+
+    assert remapped == ToolRequest(
+        name="browser.navigate",
+        arguments={"url": second_url},
+    )
+
+
 def test_runtime_finalizes_immediately_after_requested_resource_count():
     resource_urls = [
         "https://example.test/items/1001",
@@ -414,10 +1134,6 @@ def test_runtime_finalizes_immediately_after_requested_resource_count():
     provider = MockLlmProvider(
         [
             _tool_call_result("browser.navigate", {"url": resource_urls[0]}),
-            _tool_call_result("browser.back", {}),
-            _tool_call_result("browser.navigate", {"url": resource_urls[1]}),
-            _tool_call_result("browser.back", {}),
-            _tool_call_result("browser.navigate", {"url": resource_urls[2]}),
             _text_result("Three distinct resources compared with exact links."),
         ]
     )
@@ -444,9 +1160,7 @@ def test_runtime_finalizes_immediately_after_requested_resource_count():
 
     events = asyncio.run(
         _collect(
-            runtime.run(
-                UserTask("Найди три разные страницы, прочитай каждую и сравни результаты")
-            )
+            runtime.run(UserTask("Найди три разные страницы, прочитай каждую и сравни результаты"))
         )
     )
     final_payload = json.loads(provider.requests[-1].messages[1].content)
@@ -454,7 +1168,7 @@ def test_runtime_finalizes_immediately_after_requested_resource_count():
     assert runtime.last_result is not None
     assert runtime.last_result.success is True
     assert runtime.last_result.answer == "Three distinct resources compared with exact links."
-    assert len(provider.requests) == 6
+    assert len(provider.requests) == 2
     assert len(tool_runtime.requests) == 5
     assert provider.requests[-1].tools == ()
     assert final_payload["final_answer_only"] is True
@@ -476,11 +1190,15 @@ def test_requested_resource_count_ignores_salary_and_experience_numbers():
         == 3
     )
     assert (
-        _requested_distinct_resource_count(
-            "Найди вакансии с зарплатой 10 долларов и опытом 5 лет"
-        )
+        _requested_distinct_resource_count("Найди вакансии с зарплатой 10 долларов и опытом 5 лет")
         is None
     )
+
+
+def test_hard_numeric_filter_disables_unqualified_resource_count_finalization():
+    assert _task_has_hard_numeric_filter("Найди три вакансии с зарплатой до 70 000 рублей")
+    assert _task_has_hard_numeric_filter("Find three jobs paying at least 250000 RUB")
+    assert not _task_has_hard_numeric_filter("Найди три разные вакансии и сравни требования")
 
 
 def test_resource_completion_requires_semantic_page_evidence():
@@ -704,6 +1422,28 @@ def test_runtime_stops_on_captcha_blocker_before_provider_or_tools():
     assert blocker_event.details["blocker_type"] == "captcha_blocking_page"
     assert blocker_event.details["stop"] is True
     assert events[-1].name == "task_failed"
+    assert provider.requests == []
+    assert tool_runtime.requests == []
+
+
+def test_runtime_stops_on_browser_observation_error_before_provider_or_tools():
+    provider = MockLlmProvider([_tool_call_result("test.click", {"target": "primary"})])
+    tool_runtime = FakeToolRuntime([])
+    runtime = _runtime(
+        provider,
+        FakePlanningEngine(),
+        tool_runtime,
+        HierarchicalMemory(),
+        observation_engine=BlockedObservationEngine(PageIssueCode.OBSERVATION_ERROR),
+    )
+
+    events = asyncio.run(_collect(runtime.run(UserTask("Read current page"))))
+    blocker_event = next(event for event in events if event.name == "page_blocker_detected")
+
+    assert runtime.last_result is not None
+    assert runtime.last_result.termination_reason is TaskTerminationReason.PAGE_BLOCKER
+    assert blocker_event.details["blocker_type"] == "browser_observation_error"
+    assert blocker_event.details["runtime_response"] == "restart_browser"
     assert provider.requests == []
     assert tool_runtime.requests == []
 
@@ -1006,6 +1746,82 @@ def _browser_click_by_intent_schema() -> ToolSchema:
     )
 
 
+def _browser_resolve_target_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.resolve_target",
+        description="Resolve a semantic target without clicking.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema(
+                    "kind",
+                    ToolValueType.STRING,
+                    "Semantic intent kind.",
+                    enum_values=("click", "field", "search_field"),
+                ),
+                ToolFieldSchema(
+                    "target",
+                    ToolValueType.STRING,
+                    "Visible semantic target.",
+                    required=False,
+                ),
+                ToolFieldSchema(
+                    "role",
+                    ToolValueType.STRING,
+                    "Optional semantic role.",
+                    required=False,
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
+def _browser_fill_by_label_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.fill_by_label",
+        description="Fill a visible field by semantic label.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema(
+                    "label",
+                    ToolValueType.STRING,
+                    "Visible field label.",
+                ),
+                ToolFieldSchema(
+                    "value",
+                    ToolValueType.STRING,
+                    "Value to enter.",
+                    sensitive=True,
+                ),
+                ToolFieldSchema(
+                    "context",
+                    ToolValueType.STRING,
+                    "Optional visible context.",
+                    required=False,
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
+def _browser_press_key_schema() -> ToolSchema:
+    return ToolSchema(
+        name="browser.press_key",
+        description="Press a browser key.",
+        input_schema=ToolInputSchema(
+            fields=(
+                ToolFieldSchema(
+                    "key",
+                    ToolValueType.STRING,
+                    "Key name.",
+                ),
+            )
+        ),
+        output_schema=ToolOutputSchema(),
+    )
+
+
 def _browser_navigate_schema() -> ToolSchema:
     return ToolSchema(
         name="browser.navigate",
@@ -1035,9 +1851,7 @@ def _browser_back_schema() -> ToolSchema:
 def _tool_call_result(name, arguments):
     return LlmProviderResult(
         success=True,
-        response=LlmProviderResponse(
-            tool_calls=(LlmToolCall(name=name, arguments=arguments),)
-        ),
+        response=LlmProviderResponse(tool_calls=(LlmToolCall(name=name, arguments=arguments),)),
     )
 
 
@@ -1055,6 +1869,7 @@ def _tool_result(
     status: ToolExecutionStatus = ToolExecutionStatus.SUCCESS,
     retryable: bool = False,
     message: str = "Tool completed.",
+    data: dict[str, object] | None = None,
     failure_kind: ToolFailureKind | None = None,
     error_code: str | None = None,
 ) -> ToolExecutionResult:
@@ -1064,6 +1879,7 @@ def _tool_result(
         status=status,
         success=success,
         message=message,
+        data=data or {},
         failure_kind=failure_kind,
         retryable=retryable,
         error_code=error_code,

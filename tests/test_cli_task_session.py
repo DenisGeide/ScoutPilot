@@ -13,7 +13,12 @@ from scout_pilot.llm.types import (
     LlmProviderResult,
     LlmToolCall,
 )
-from scout_pilot.models import RuntimeEvent, RuntimeStatus
+from scout_pilot.models import RuntimeEvent, RuntimeStatus, UserTask
+from scout_pilot.runtime.types import (
+    AgentState,
+    AgentTaskResult,
+    TaskTerminationReason,
+)
 
 
 def test_dry_run_task_generates_safe_report_and_replay(tmp_path):
@@ -54,6 +59,24 @@ def test_dry_run_task_generates_safe_report_and_replay(tmp_path):
     assert "secret.txt" not in serialized
     assert "<html" not in serialized
     assert "browser profile" not in serialized
+
+
+def test_fatal_runtime_error_is_not_exposed_to_user():
+    result = AgentTaskResult(
+        task_id="task-1",
+        task=UserTask("Read current page"),
+        status=RuntimeStatus.FAILED,
+        final_state=AgentState.FAILED,
+        success=False,
+        termination_reason=TaskTerminationReason.FATAL_ERROR,
+        message="Locator.evaluate: Connection closed at C:\\private\\path",
+    )
+
+    message = task_session._result_message_ru(result)
+
+    assert "внутренняя ошибка" in message.casefold()
+    assert "Locator.evaluate" not in message
+    assert "private" not in message
 
 
 def test_live_cli_mode_reports_missing_provider_key(tmp_path, monkeypatch):
@@ -201,9 +224,7 @@ def test_live_cli_surfaces_security_pause_in_russian(tmp_path, monkeypatch):
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
     event_names = [event["name"] for event in report["events"]]
     tool_events = [
-        event
-        for event in report["events"]
-        if event["name"] == "tool_execution_finished"
+        event for event in report["events"] if event["name"] == "tool_execution_finished"
     ]
 
     assert result.success is False
@@ -363,6 +384,31 @@ def test_confirmation_eof_is_a_clean_safe_cancel(monkeypatch):
 
     assert confirmed is False
     assert any("Ввод подтверждения недоступен" in message for message in messages)
+
+
+def test_confirmation_reprompts_after_unrecognized_answer(monkeypatch):
+    messages: list[str] = []
+    answers = iter(["джа", "да"])
+    monkeypatch.setattr(
+        task_session,
+        "_read_confirmation_answer",
+        lambda _prompt: next(answers),
+    )
+
+    confirmed = task_session._ask_user_confirmation(
+        {
+            "confirmation_id": "confirm_test",
+            "tool_name": "browser.click_by_intent",
+            "risk": "external_side_effect",
+            "action": "нажать «Откликнуться»",
+            "target": "Откликнуться",
+            "sanitized_arguments": {"target": "Откликнуться"},
+        },
+        messages.append,
+    )
+
+    assert confirmed is True
+    assert any("Не удалось распознать ответ" in message for message in messages)
 
 
 def test_dashboard_renders_required_status_fields():

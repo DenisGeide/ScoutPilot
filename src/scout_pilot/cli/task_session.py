@@ -268,9 +268,7 @@ async def _run_live_task(
                 tool_schemas,
             )
             if not navigation.success:
-                final_message = (
-                    "Не удалось открыть стартовую страницу. Проверьте URL, сеть и доступность сайта."
-                )
+                final_message = "Не удалось открыть стартовую страницу. Проверьте URL, сеть и доступность сайта."
                 recorder.finalize(
                     success=False,
                     summary_ru=final_message,
@@ -658,10 +656,7 @@ def _context_budget_message(metrics: Mapping[str, object]) -> str:
     suffix = ""
     if metrics.get("emergency_compression_applied") is True:
         suffix = " Использовано аварийное сжатие."
-    return (
-        f"Контекст сжат: {before} -> {after} токенов, "
-        f"сохранены: {'/'.join(preserved)}.{suffix}"
-    )
+    return f"Контекст сжат: {before} -> {after} токенов, сохранены: {'/'.join(preserved)}.{suffix}"
 
 
 def _metric_int(metrics: Mapping[str, object], key: str) -> int:
@@ -722,16 +717,26 @@ def _ask_user_confirmation(
     sink: ProgressSink,
 ) -> bool:
     sink(_format_confirmation_notice(confirmation, interactive=True))
-    try:
-        answer = _read_confirmation_answer("Подтвердить это действие один раз? [да/нет]: ")
-    except EOFError:
+    for _ in range(3):
+        try:
+            answer = _read_confirmation_answer("Подтвердить это действие один раз? [да/нет]: ")
+        except (EOFError, StopIteration):
+            sink(
+                "Ввод подтверждения недоступен: действие не выполнено. "
+                "Запрос сохранен в безопасном отчете."
+            )
+            return False
+        normalized = answer.strip().casefold()
+        if normalized in {"y", "yes", "да", "д", "подтверждаю", "approve"}:
+            return True
+        if normalized in {"", "n", "no", "нет", "н", "отмена", "cancel"}:
+            return False
         sink(
-            "Ввод подтверждения недоступен: действие не выполнено. "
-            "Запрос сохранен в безопасном отчете."
+            "Не удалось распознать ответ. Напишите `да` для выполнения "
+            "или `нет` для безопасной отмены."
         )
-        return False
-    normalized = answer.strip().casefold()
-    return normalized in {"y", "yes", "да", "д", "подтверждаю", "approve"}
+    sink("Подтверждение не получено: действие безопасно отменено.")
+    return False
 
 
 def _stdin_is_interactive() -> bool:
@@ -825,9 +830,7 @@ def _redact_tool_arguments(
     schemas: tuple[ToolSchema, ...],
 ) -> dict[str, object]:
     schema = next((schema for schema in schemas if schema.name == request.name), None)
-    sensitive_fields = (
-        schema.input_schema.sensitive_field_names() if schema is not None else set()
-    )
+    sensitive_fields = schema.input_schema.sensitive_field_names() if schema is not None else set()
     redacted: dict[str, object] = {}
     for key, value in request.arguments.items():
         if key in sensitive_fields or key.casefold() in {
@@ -863,6 +866,11 @@ def _result_message_ru(result) -> str:
             "модель, лимиты и сеть, затем повторите задачу."
         )
     if result.termination_reason is TaskTerminationReason.PAGE_BLOCKER:
+        if "browser observation" in (result.message or "").casefold():
+            return (
+                "Связь с браузером потеряна. Текущая задача остановлена без новых действий; "
+                "в режиме чата браузер будет перезапущен перед следующей задачей."
+            )
         return (
             "На странице обнаружен блокер: CAPTCHA, login wall, региональный запрос, модальное окно или похожее препятствие. "
             "Агент не обходит такие проверки, не автоматизирует логин и записывает причину в отчет."
@@ -876,6 +884,11 @@ def _result_message_ru(result) -> str:
         return "Достигнут лимит повторных ошибок. Агент остановился, чтобы не зациклиться."
     if result.termination_reason is TaskTerminationReason.CANCELLED:
         return "Задача отменена пользователем."
+    if result.termination_reason is TaskTerminationReason.FATAL_ERROR:
+        return (
+            "Произошла внутренняя ошибка выполнения. Текущая задача остановлена безопасно; "
+            "в режиме чата браузер будет проверен перед следующей задачей."
+        )
     return result.message or "Задача остановлена. Подробности сохранены в отчете."
 
 

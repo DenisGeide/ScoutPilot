@@ -57,9 +57,7 @@ def test_browser_back_tool_uses_high_level_engine_history_api():
         ToolContext(browser=browser),
     )
 
-    result = asyncio.run(
-        runtime.execute(ToolRequest(name="browser.back", arguments={}))
-    )
+    result = asyncio.run(runtime.execute(ToolRequest(name="browser.back", arguments={})))
 
     assert result.success is True
     assert browser.actions == [("back",)]
@@ -73,9 +71,7 @@ def test_press_key_normalizes_alt_left_history_alias_without_confirmation():
     )
 
     result = asyncio.run(
-        runtime.execute(
-            ToolRequest(name="browser.press_key", arguments={"key": "Alt+Left"})
-        )
+        runtime.execute(ToolRequest(name="browser.press_key", arguments={"key": "Alt+Left"}))
     )
 
     assert result.success is True
@@ -277,9 +273,7 @@ def test_submit_click_pauses_before_browser_action():
     )
 
     result = asyncio.run(
-        runtime.execute(
-            ToolRequest(name="browser.click", arguments={"element_id": "el_submit"})
-        )
+        runtime.execute(ToolRequest(name="browser.click", arguments={"element_id": "el_submit"}))
     )
 
     assert result.status is ToolExecutionStatus.PAUSED
@@ -287,6 +281,35 @@ def test_submit_click_pauses_before_browser_action():
     assert result.data["security"]["risk"] == ActionRisk.EXTERNAL_SIDE_EFFECT.value
     assert result.data["confirmation"]["tool_name"] == "browser.click"
     assert browser.actions == []
+
+
+def test_read_only_composite_link_executes_without_confirmation():
+    browser = FakeBrowser()
+    label = (
+        "ML/LLM Engineer в AI Lab Опыт 3-6 лет Можно удалённо Example Company Москва Откликнуться"
+    )
+    runtime = DefaultToolRuntime(
+        create_browser_tool_registry(),
+        ToolContext(
+            browser=browser,
+            observation_engine=FakeObservationEngine(
+                "el_vacancy",
+                label,
+                role="link",
+                target_url="https://example.test/jobs/135124449",
+            ),
+        ),
+    )
+
+    result = asyncio.run(
+        runtime.execute(ToolRequest(name="browser.click", arguments={"element_id": "el_vacancy"}))
+    )
+
+    assert result.status is ToolExecutionStatus.SUCCESS
+    assert result.success is True
+    assert browser.actions == [("click", "el_vacancy")]
+    assert runtime.pending_confirmations == ()
+    assert runtime.security_audit_trail[-1].outcome == "allowed"
 
 
 def test_destructive_click_requires_confirmation_before_browser_action():
@@ -300,9 +323,7 @@ def test_destructive_click_requires_confirmation_before_browser_action():
     )
 
     result = asyncio.run(
-        runtime.execute(
-            ToolRequest(name="browser.click", arguments={"element_id": "el_delete"})
-        )
+        runtime.execute(ToolRequest(name="browser.click", arguments={"element_id": "el_delete"}))
     )
 
     assert result.status is ToolExecutionStatus.PAUSED
@@ -398,9 +419,18 @@ class FakeBrowser:
 
 
 class FakeObservationEngine:
-    def __init__(self, element_id: str | None = None, label: str | None = None):
+    def __init__(
+        self,
+        element_id: str | None = None,
+        label: str | None = None,
+        *,
+        role: str = "button",
+        target_url: str | None = None,
+    ):
         self.element_id = element_id
         self.label = label
+        self.role = role
+        self.target_url = target_url
 
     async def observe(self):
         elements = []
@@ -408,9 +438,10 @@ class FakeObservationEngine:
             elements.append(
                 InteractiveElement(
                     element_id=self.element_id,
-                    role="button",
+                    role=self.role,
                     accessible_name=self.label,
                     visible_text=self.label,
+                    target_url=self.target_url,
                 )
             )
         return PageObservation(

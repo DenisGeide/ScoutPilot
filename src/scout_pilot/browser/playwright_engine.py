@@ -64,7 +64,10 @@ class PlaywrightBrowserEngine:
         """Start a persistent browser context and return public session metadata."""
 
         if self._session is not None:
-            return self._session
+            state = await self.current_state()
+            if state.is_started:
+                return self._session
+            await self.stop()
 
         self._prepare_private_directory(self._settings.user_data_dir)
         try:
@@ -88,14 +91,10 @@ class PlaywrightBrowserEngine:
                 },
             )
             self._context.set_default_timeout(self._settings.default_timeout_ms)
-            self._context.set_default_navigation_timeout(
-                self._settings.navigation_timeout_ms
-            )
+            self._context.set_default_navigation_timeout(self._settings.navigation_timeout_ms)
             self._context.on("page", self._activate_new_page)
             self._page = (
-                self._context.pages[-1]
-                if self._context.pages
-                else await self._context.new_page()
+                self._context.pages[-1] if self._context.pages else await self._context.new_page()
             )
             for page in self._context.pages:
                 self._install_dialog_handler(page)
@@ -261,7 +260,7 @@ class PlaywrightBrowserEngine:
                 title=await page.title(),
                 session_id=self._session.session_id,
             )
-        except PlaywrightError:
+        except Exception:
             return BrowserState(is_started=False)
 
     async def screenshot(self, path: Path | None = None) -> ScreenshotResult:
@@ -496,8 +495,11 @@ class PlaywrightBrowserEngine:
                 dialogs=snapshot.dialogs,
                 issues=tuple(dict.fromkeys((*snapshot.issues, self._last_navigation_error))),
             )
-        except PlaywrightError as exc:
+        except Exception as exc:
             state = await self.current_state()
+            issue = (
+                "browser_disconnected" if _is_browser_connection_error(exc) else "observation_error"
+            )
             return BrowserPageSnapshot(
                 url=state.url,
                 title=state.title,
@@ -507,8 +509,13 @@ class PlaywrightBrowserEngine:
                 issues=tuple(
                     dict.fromkeys(
                         (
+                            issue,
                             "observation_error",
-                            *((self._last_navigation_error,) if self._last_navigation_error else ()),
+                            *(
+                                (self._last_navigation_error,)
+                                if self._last_navigation_error
+                                else ()
+                            ),
                         )
                     )
                 ),
@@ -532,17 +539,21 @@ class PlaywrightBrowserEngine:
         return None
 
     def _get_page_or_none(self) -> Any | None:
-        if self._page is not None and not self._page.is_closed():
-            return self._page
-        if self._context is None:
+        try:
+            if self._page is not None and not self._page.is_closed():
+                return self._page
+            if self._context is None:
+                return None
+            open_pages = [page for page in self._context.pages if not page.is_closed()]
+            if open_pages:
+                self._page = open_pages[-1]
+                self._install_dialog_handler(self._page)
+                return self._page
+            self._page = None
             return None
-        open_pages = [page for page in self._context.pages if not page.is_closed()]
-        if open_pages:
-            self._page = open_pages[-1]
-            self._install_dialog_handler(self._page)
-            return self._page
-        self._page = None
-        return None
+        except Exception:
+            self._page = None
+            return None
 
     async def _successful_action(self, action: str, message: str) -> BrowserActionResult:
         self._last_navigation_error = None
@@ -663,9 +674,7 @@ class PlaywrightBrowserEngine:
         if context is None:
             return False
         candidates = [
-            page
-            for page in context.pages
-            if page is not current_page and not page.is_closed()
+            page for page in context.pages if page is not current_page and not page.is_closed()
         ]
         if not candidates:
             return False
@@ -769,6 +778,19 @@ def _is_supported_url(url: str) -> bool:
     if parsed.scheme in {"http", "https"} and not parsed.netloc:
         return False
     return True
+
+
+def _is_browser_connection_error(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "connection closed",
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "closed while reading from the driver",
+        )
+    )
 
 
 def _is_text_fillable(input_type: str | None, role: str | None) -> bool:

@@ -25,9 +25,25 @@ Rules:
   browser.wait and browser.screenshot.
 - Do not use CSS selectors, XPath, Playwright locators, DOM APIs, route paths
   or website-specific selectors.
+- For a read-only item with an observed target_url, prefer browser.navigate
+  with that exact URL instead of clicking a large card container.
 - Mark uncertain steps honestly.
 - Mark steps that may submit, purchase, delete, publish, send, upload or make
   external side effects as requiring confirmation.
+- Treat numeric constraints in the user goal as hard acceptance criteria. Verify
+  upper and lower salary bounds from visible result/detail text; do not assume
+  that a website URL parameter named salary represents an upper bound. If the
+  user sets an upper bound, never put that number into a generic search field
+  or a visibly minimum/'from' filter. Search by subject keywords and evaluate
+  the upper bound from visible result/detail text. Use a numeric upper-bound
+  filter only when its visible label explicitly means maximum/'to'. Do not
+  keep reformulating a search while unvisited result links are visible. If the
+  current page has no valid matches, plan pagination or a broader semantic
+  search before concluding that no match exists.
+- After an ambiguous semantic click, do not repeat the same click. Re-observe,
+  resolve the target with a more specific role/name/context, or select one
+  concrete observed target URL. Do not refill an unchanged field after a
+  successful fill.
 - Return strict JSON only, with no markdown.
 
 JSON shape:
@@ -102,14 +118,10 @@ def build_revision_plan_messages(
         "existing_plan": {
             "summary": plan.summary,
             "completed_steps_to_preserve": [
-                _step_summary(step)
-                for step in plan.steps
-                if step.status.value == "completed"
+                _step_summary(step) for step in plan.steps if step.status.value == "completed"
             ],
             "remaining_steps": [
-                _step_summary(step)
-                for step in plan.steps
-                if step.status.value != "completed"
+                _step_summary(step) for step in plan.steps if step.status.value != "completed"
             ],
         },
     }

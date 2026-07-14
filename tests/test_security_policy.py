@@ -102,6 +102,19 @@ def test_policy_allows_enter_when_search_field_is_focused():
     assert decision.requires_confirmation is False
 
 
+def test_policy_allows_enter_for_one_unambiguous_search_field_without_focus_snapshot():
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(name="browser.press_key", arguments={"key": "Enter"}),
+        SecurityEvaluationContext(observation=_search_observation()),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk is ActionRisk.SAFE
+    assert decision.requires_confirmation is False
+
+
 def test_policy_still_pauses_enter_in_an_unknown_form():
     policy = DeterministicSecurityPolicy()
     observation = PageObservation(
@@ -152,6 +165,134 @@ def test_policy_requires_confirmation_for_external_side_effect_click():
     assert decision.risk is ActionRisk.EXTERNAL_SIDE_EFFECT
     assert decision.requires_confirmation is True
     assert "отклик" in decision.classification.expected_consequence
+
+
+def test_policy_allows_reading_composite_link_with_nested_apply_text():
+    policy = DeterministicSecurityPolicy()
+    label = (
+        "Сейчас смотрят 10 человек ML/LLM Engineer в AI Lab "
+        "Опыт 3-6 лет Можно удалённо Example Company Москва Откликнуться"
+    )
+    observation = PageObservation(
+        url="https://example.test/jobs",
+        title="Jobs",
+        summary="Vacancy results.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_vacancy",
+                role="link",
+                accessible_name=label,
+                visible_text=label,
+                target_url="https://example.test/jobs/135124449?source=search",
+            )
+        ],
+    )
+
+    decision = policy.evaluate(
+        ToolRequest(name="browser.click", arguments={"element_id": "el_vacancy"}),
+        SecurityEvaluationContext(observation=observation),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk is ActionRisk.SAFE
+    assert decision.requires_confirmation is False
+    assert decision.classification.matched_terms == ("read_only_navigation",)
+
+
+def test_policy_still_pauses_explicit_apply_navigation_link():
+    policy = DeterministicSecurityPolicy()
+    observation = PageObservation(
+        url="https://example.test/jobs/135124449",
+        title="AI Engineer",
+        summary="Vacancy details.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_apply_link",
+                role="link",
+                accessible_name="Откликнуться",
+                visible_text="Откликнуться",
+                target_url="https://example.test/forms/135124449",
+            )
+        ],
+    )
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.click",
+            arguments={"element_id": "el_apply_link"},
+        ),
+        SecurityEvaluationContext(observation=observation),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk is ActionRisk.EXTERNAL_SIDE_EFFECT
+    assert decision.requires_confirmation is True
+
+
+def test_policy_does_not_treat_remote_work_as_deletion():
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(name="browser.click", arguments={"element_id": "el_remote"}),
+        SecurityEvaluationContext(observation=_observation("el_remote", "Можно удалённо")),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk is ActionRisk.SAFE
+    assert decision.requires_confirmation is False
+
+
+def test_policy_requires_confirmation_for_russian_delete_action():
+    policy = DeterministicSecurityPolicy()
+
+    decision = policy.evaluate(
+        ToolRequest(name="browser.click", arguments={"element_id": "el_delete"}),
+        SecurityEvaluationContext(observation=_observation("el_delete", "Удалить вакансию")),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk is ActionRisk.DESTRUCTIVE
+    assert decision.requires_confirmation is True
+
+
+def test_policy_allows_reading_composite_semantic_card_by_specific_title():
+    policy = DeterministicSecurityPolicy()
+    title = "AI Tooling Engineer / Senior Python Developer"
+    card_text = (
+        f"{title} Positive Technologies Опыт более 6 лет "
+        "Основные требования Python LLM Откликнуться"
+    )
+    observation = PageObservation(
+        url="https://example.test/jobs",
+        title="Jobs",
+        summary="Vacancy results.",
+        interactive_elements=[
+            InteractiveElement(
+                element_id="el_card",
+                role="button",
+                accessible_name=card_text,
+                visible_text=card_text,
+                input_type="button",
+            )
+        ],
+    )
+
+    decision = policy.evaluate(
+        ToolRequest(
+            name="browser.click_by_intent",
+            arguments={
+                "target": title,
+                "role": "button",
+                "context": "Positive Technologies, опыт более 6 лет",
+            },
+        ),
+        SecurityEvaluationContext(observation=observation),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk is ActionRisk.SAFE
+    assert decision.requires_confirmation is False
+    assert decision.classification.matched_terms == ("read_only_composite_item",)
 
 
 @pytest.mark.parametrize(

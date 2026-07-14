@@ -191,7 +191,9 @@ def test_anthropic_provider_parses_text_and_tool_use_response():
         response=SimpleNamespace(
             content=[
                 SimpleNamespace(type="text", text="Working."),
-                SimpleNamespace(type="tool_use", name="browser.click", input={"element_id": "el_1"}),
+                SimpleNamespace(
+                    type="tool_use", name="browser.click", input={"element_id": "el_1"}
+                ),
             ],
             stop_reason="tool_use",
             usage=SimpleNamespace(input_tokens=7, output_tokens=3),
@@ -329,9 +331,7 @@ def test_reasoning_engine_preserves_visible_item_urls_in_answer():
         [
             LlmProviderResult(
                 success=True,
-                response=LlmProviderResponse(
-                    content="1. AI Engineer\n2. LLM Engineer"
-                ),
+                response=LlmProviderResponse(content="1. AI Engineer\n2. LLM Engineer"),
             )
         ]
     )
@@ -373,6 +373,7 @@ def test_reasoning_engine_preserves_visible_item_urls_in_answer():
     assert "Ссылки:" in result.answer
     system_message = provider.requests[0].messages[0].content
     assert "exact target_url" in system_message
+    assert "prefer browser.navigate with that exact URL" in system_message
     assert "Never repeat observation or wait" in system_message
 
 
@@ -432,7 +433,10 @@ def test_reasoning_engine_budgeting_compresses_oversized_context():
                 user_task="Find the most relevant result without submitting forms.",
                 observation=_large_observation(),
                 memory_summaries=[
-                    *(f"working.observation: repeated header snapshot {index}" for index in range(12)),
+                    *(
+                        f"working.observation: repeated header snapshot {index}"
+                        for index in range(12)
+                    ),
                     "task.constraint: do not submit forms.",
                     "security warning: never expose cookies.",
                 ],
@@ -483,7 +487,10 @@ def _large_observation() -> PageObservation:
         title="Large",
         summary="Large search results page." * 40,
         sections=[
-            *(SemanticSection(f"header_{index}", "header", "Header", repeated) for index in range(8)),
+            *(
+                SemanticSection(f"header_{index}", "header", "Header", repeated)
+                for index in range(8)
+            ),
             *(
                 SemanticSection(
                     f"result_{index}",
